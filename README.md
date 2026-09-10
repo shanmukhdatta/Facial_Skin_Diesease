@@ -1,109 +1,216 @@
-# Facial Skin Disease Classification and Synthetic Data Generation
+<div align="center">
 
-This repository contains the complete experimental pipeline, including synthetic image generation manifests, transfer learning workflows for deep neural backbones, soft-voting ensemble evaluation, and reproducible Jupyter notebooks.
+# Facial Skin Disease Classification & Synthetic Data Generation
+
+**A reproducible deep-learning research pipeline for facial skin disease classification, synthetic image generation, multi-model benchmarking, weighted ensemble evaluation, and inference.**
+
+<p>
+  <img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python 3.10+">
+  <img src="https://img.shields.io/badge/TensorFlow-2.15%2B-FF6F00?style=for-the-badge&logo=tensorflow&logoColor=white" alt="TensorFlow">
+  <img src="https://img.shields.io/badge/PyTorch-2.0%2B-EE4C2C?style=for-the-badge&logo=pytorch&logoColor=white" alt="PyTorch">
+  <img src="https://img.shields.io/github/license/shanmukhdatta/Facial_Skin_Diesease?style=for-the-badge" alt="MIT License">
+</p>
+
+</div>
+
+> **Research / educational software.** This repository is an experimental computer-vision pipeline. It is **not a medical diagnostic device**, and predictions must not be treated as a substitute for evaluation by a qualified clinician.
+
+---
+
+## Overview
+
+This project combines two complementary research workflows:
+
+1. **Synthetic data generation** — controlled generation of facial skin-condition images using structured prompts and diffusion models, with a separate StyleGAN2-ADA path for Skin Cancer.
+2. **Deep image classification** — preprocessing, quality control, leakage-aware splitting, training-set balancing, transfer learning, progressive fine-tuning, comprehensive evaluation, ensemble prediction, and standalone inference.
+
+The codebase is organized as reusable Python modules under `src/`, configuration under `configs/`, CLI entry points under `scripts/`, prompt manifests under `prompts/`, and experimental notebooks under `Note books/`.
+
+---
+
+## Key Features
+
+| Component | Capability |
+|---|---|
+| Data ingestion | Recursive discovery of JPG, JPEG, PNG, BMP, TIFF and WebP images |
+| Data validation | Full image decoding and invalid/corrupt-image filtering |
+| Dataset splitting | Stratified 70/15/15 train/validation/test split |
+| Class balancing | Training-only bounded oversampling/capping |
+| Input pipeline | TensorFlow `tf.data`, batching, shuffling and prefetching |
+| Augmentation | Flip, rotation, zoom, contrast, brightness and translation |
+| Backbones | EfficientNetV2-B0, ResNet-50, DenseNet-121, MobileNetV3-Large, ViT-B/16 |
+| Training | Three-phase progressive unfreezing |
+| Loss | Multi-class Focal Loss |
+| Regularization | Dropout and L2 regularization |
+| Evaluation | Accuracy, Macro-F1, Weighted-F1, AUC-ROC, Cohen's Kappa, MCC |
+| Ensemble | Accuracy-weighted soft voting |
+| Inference | Single-image prediction and probability visualization |
+| Generation | Realistic Vision V5.1 + optional StyleGAN2-ADA |
+| Reproducibility | Fixed seeds, centralized configuration and verification suite |
+
+---
+
+## Pipeline Architecture
+
+```text
+Raw Dataset
+    │
+    ▼
+Discover Images
+    │
+    ▼
+Validate / Clean
+    │
+    ▼
+Stratified 70 / 15 / 15 Split
+    │
+    ├──────────────► Validation / Test (untouched)
+    │
+    ▼
+Balance Training Split
+    │
+    ▼
+tf.data + Augmentation
+    │
+    ▼
+┌─────────────────────────────────────────────┐
+│          Three-Phase Transfer Learning       │
+│                                             │
+│  Phase 1 → Frozen backbone / head warm-up  │
+│  Phase 2 → Partial backbone unfreezing     │
+│  Phase 3 → Deep fine-tuning with AdamW     │
+└──────────────────────┬──────────────────────┘
+                       │
+                       ▼
+             Model Evaluation
+                       │
+          ┌────────────┴────────────┐
+          ▼                         ▼
+ Individual Metrics         Weighted Soft Voting
+          │                         │
+          └────────────┬────────────┘
+                       ▼
+              Inference / Analysis
+```
 
 ---
 
 ## Repository Structure
 
-```
-Facial_Skin_Disease_Synthetic_Generation/
-└── Notebook.ipynb                # Comprehensive experimental notebook demonstrating the supported classification architectures and evaluation workflow
-│
+```text
+Facial_Skin_Diesease/
 ├── configs/
-│   ├── config.py                     # Central configuration dataclass (paths, hyperparameters, splits)
-│   └── generation_config.yaml        # Generative model configurations (Diffusion & StyleGAN2-ADA)
+│   ├── config.py
+│   └── generation_config.yaml
 │
-├── prompts/                          # Clinical prompt manifests and metadata for synthetic generation
-│   ├── acne.txt                      # Prompt texts for Acne
-│   ├── acne_meta.jsonl               # Structured metadata (phenotype, severity, Fitzpatrick scale)
-│   ├── vitiligo.txt (+ _meta.jsonl)
-│   ├── fungal_infection.txt (+ _meta.jsonl)
-│   ├── normal_skin.txt (+ _meta.jsonl)
-│   ├── hyperpigmentation.txt (+ _meta.jsonl)
-│   └── README.md                     # Documentation of prompt design taxonomy
+├── prompts/
+│   ├── acne.txt
+│   ├── acne_meta.jsonl
+│   ├── fungal_infection.txt
+│   ├── fungal_infection_meta.jsonl
+│   ├── hyperpigmentation.txt
+│   ├── hyperpigmentation_meta.jsonl
+│   ├── normal_skin.txt
+│   ├── normal_skin_meta.jsonl
+│   ├── vitiligo.txt
+│   ├── vitiligo_meta.jsonl
+│   └── README.md
 │
-├── src/                              # Core Python source package
+├── src/
 │   ├── data/
-│   │   ├── dataset.py                # Dataset discovery, validation, cleaning, and stratified splitting
-│   │   ├── pipeline.py               # tf.data input pipeline construction and clinical augmentations
-│   │   └── utils.py                  # Class weighting, label mapping, and dataset serialization
+│   │   ├── dataset.py
+│   │   ├── pipeline.py
+│   │   └── utils.py
 │   ├── generation/
-│   │   ├── prompts.py                # Prompt builder and variation generator
-│   │   ├── diffusion_generator.py    # Latent Diffusion synthesis engine (Realistic Vision V5.1)
-│   │   ├── stylegan_generator.py     # StyleGAN2-ADA inference and sampling engine
-│   │   └── stylegan_trainer.py       # StyleGAN2-ADA training orchestration and step execution
+│   │   ├── prompts.py
+│   │   ├── diffusion_generator.py
+│   │   ├── stylegan_generator.py
+│   │   └── stylegan_trainer.py
 │   ├── models/
-│   │   ├── backbones.py              # Backbone loaders (EfficientNet, ResNet, DenseNet, MobileNet, ViT)
-│   │   ├── builder.py                # Classification head assembly and layer freezing/unfreezing logic
-│   │   ├── custom_layers.py          # Architecture-specific input preprocessing layers
-│   │   └── losses.py                 # Multi-class Focal Loss implementation
+│   │   ├── backbones.py
+│   │   ├── builder.py
+│   │   ├── custom_layers.py
+│   │   └── losses.py
 │   ├── training/
-│   │   ├── callbacks.py              # Checkpoint, early stopping, and learning rate scheduling callbacks
-│   │   └── trainer.py                # PhasedTrainer: 3-phase progressive unfreezing protocol
+│   │   ├── callbacks.py
+│   │   └── trainer.py
 │   ├── evaluation/
-│   │   ├── metrics.py                # Evaluation metrics (Accuracy, Macro-F1, Kappa, MCC, AUC-ROC)
-│   │   ├── ensemble.py               # Performance-weighted soft-voting ensemble
-│   │   └── visualization.py          # Confusion matrices, ROC curves, and training history plots
+│   │   ├── metrics.py
+│   │   ├── ensemble.py
+│   │   └── visualization.py
 │   └── inference/
-│       └── predictor.py              # Standalone single-image and batch prediction engine
+│       └── predictor.py
 │
-├── scripts/                          # Command-line entry points
-│   ├── run_generation.py             # Script to generate synthetic images from prompt manifests
-│   ├── run_training.py               # Script to train classification backbones
-│   ├── run_evaluation.py             # Script to evaluate trained checkpoints and compute ensemble metrics
-│   ├── run_inference.py              # Script to perform inference on input images
-│   └── verify_reproducibility.py     # Script to verify environment, pipeline modules, and configs
+├── scripts/
+│   ├── run_generation.py
+│   ├── run_training.py
+│   ├── run_evaluation.py
+│   ├── run_inference.py
+│   └── verify_reproducibility.py
 │
+├── Note books/
+│   ├── Modular_Pipeline.ipynb
+│   └── Notebook.ipynb
 │
-├── requirements.txt                  # Python package dependencies
-├── LICENSE                           # MIT License
-└── README.md                         # Project documentation
+├── requirements.txt
+├── LICENSE
+└── README.md
 ```
 
 ---
 
-## Installation & Setup
+## Installation
 
-### Prerequisites
-- Python 3.10 or higher
-- CUDA-compatible GPU recommended for training and diffusion generation
+### Requirements
 
-### Setup Instructions
+- Python 3.10+
+- CUDA-capable GPU recommended for training and diffusion generation
+- TensorFlow 2.15+
+- PyTorch 2.0+
+- Dependencies listed in `requirements.txt`
 
-1. **Clone the repository:**
-   ```bash
-    git clone https://github.com/shanmukhdatta/Facial_Skin_Diesease.git
-   cd Facial_Skin_Diesease
-   ```
+### Clone
 
-2. **Create and activate a virtual environment:**
-   ```bash
-   python -m venv venv
-   # On Linux/macOS:
-   source venv/bin/activate
-   # On Windows:
-   venv\Scripts\activate
-   ```
+```bash
+git clone https://github.com/shanmukhdatta/Facial_Skin_Diesease.git
+cd Facial_Skin_Diesease
+```
 
-3. **Install dependencies:**
-   ```bash
-   pip install --upgrade pip
-   pip install -r requirements.txt
-   ```
+### Virtual environment
+
+**Linux / macOS**
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+```
+
+**Windows PowerShell**
+
+```powershell
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+```
+
+### Install
+
+```bash
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+```
 
 ---
 
-## Dataset Organization
+## Dataset Format
 
-Place your real and synthetic dataset in the `data/Real_data/` directory (or pass custom paths via `--data_dir`):
+The classifier discovers class labels from subdirectories inside `data_dir`.
 
-```
+Recommended structure:
+
+```text
 data/
 └── Real_data/
     ├── Acne/
-    │   ├── img_001.jpg
-    │   └── ...
     ├── Fungal_Infection/
     ├── Hyperpigmentation/
     ├── Normal_Skin/
@@ -111,103 +218,499 @@ data/
     └── Vitiligo/
 ```
 
-Default paths and hyperparameters can be configured directly in `configs/config.py` or overridden using command-line arguments.
+Supported image formats:
+
+```text
+.jpg
+.jpeg
+.png
+.bmp
+.tiff
+.webp
+```
+
+The number of classification classes is determined from the dataset directories at runtime.
+
+### Data processing
+
+The pipeline:
+
+1. Discovers valid image files.
+2. Fully decodes images using Pillow.
+3. Removes corrupt, unreadable or undersized images.
+4. Performs a stratified split.
+5. Balances **only the training split**.
+6. Builds TensorFlow datasets.
+7. Applies augmentation only during training.
 
 ---
 
-## Using the Notebooks
+## Configuration
 
-The repository provides two notebooks located in the `Note books/` directory:
+Main classifier settings are centralized in `configs/config.py`.
 
-### 1. `Note books/Modular_Pipeline.ipynb`
-A clean, step-by-step interactive demonstration of the modular framework:
-- Loads project configuration from `configs/config.py`.
-- Discovers and audits dataset integrity using `src/data/dataset.py`.
-- Constructs `tf.data` training, validation, and test streams with data augmentation.
-- Trains a transfer learning backbone (e.g., EfficientNetV2-B0) via `PhasedTrainer`.
-- Evaluates model performance, plots confusion matrices and ROC curves.
-- Demonstrates multi-model soft-voting ensemble evaluation and single-image inference.
+| Parameter | Default |
+|---|---:|
+| Image size | `224 × 224` |
+| Batch size | `32` |
+| Default classes | `6` |
+| Test-size parameter | `0.30` |
+| Effective split | `70 / 15 / 15` |
+| Seed | `42` |
+| Phase 1 epochs | `15` |
+| Phase 2 epochs | `25` |
+| Phase 3 epochs | `30` |
+| Phase 1 LR | `1e-3` |
+| Phase 2 LR | `1e-4` |
+| Phase 3 LR | `2e-5` |
+| Dropout | `0.4` |
+| L2 | `1e-4` |
+| Focal gamma | `2.0` |
+| Focal alpha | `0.25` |
 
-**To run:**
+Generation settings are stored in `configs/generation_config.yaml`.
+
+---
+
+# Training
+
+The primary training entry point is:
+
+```bash
+python scripts/run_training.py
+```
+
+### Train one model
+
+```bash
+python scripts/run_training.py \
+  --data_dir data/Real_data \
+  --model ResNet50 \
+  --batch_size 32
+```
+
+### Train all supported models
+
+```bash
+python scripts/run_training.py \
+  --data_dir data/Real_data \
+  --model all
+```
+
+### Supported backbones
+
+```text
+EfficientNetV2B0
+ResNet50
+DenseNet121
+MobileNetV3Large
+ViT_B16
+```
+
+---
+
+## Training Strategy
+
+### Phase 1 — Head Warm-up
+
+The pretrained backbone is frozen while the classification head learns the task.
+
+```text
+Backbone: Frozen
+Optimizer: Adam
+Learning rate: 1e-3
+Epochs: 15
+```
+
+### Phase 2 — Partial Fine-tuning
+
+The final portion of the backbone is unfrozen.
+
+```text
+Backbone: Partially trainable
+Optimizer: Adam
+Learning rate: 1e-4
+Epochs: 25
+```
+
+### Phase 3 — Deep Fine-tuning
+
+Deeper backbone layers are unfrozen for representation adaptation.
+
+```text
+Backbone: Deep/full fine-tuning
+Optimizer: AdamW
+Learning rate: 2e-5
+Weight decay: 1e-5
+Epochs: 30
+```
+
+---
+
+## Classification Head
+
+For CNN-based architectures, the common head follows:
+
+```text
+Backbone
+   │
+Global Average Pooling
+   │
+Batch Normalization
+   │
+Dense(512, ReLU)
+   │
+Dropout
+   │
+Dense(256, ReLU)
+   │
+Dropout
+   │
+Dense(num_classes, Softmax)
+```
+
+ViT-B/16 uses a dedicated preprocessing layer and CLS-token extraction.
+
+---
+
+## Imbalance Handling
+
+Two mechanisms are used:
+
+- Training-set-only class balancing.
+- Balanced class weights during optimization.
+
+The project also uses multi-class **Focal Loss** to focus training on difficult examples.
+
+---
+
+# Synthetic Data Generation
+
+The generation subsystem supports two distinct workflows.
+
+## 1. Diffusion Generation
+
+The configured diffusion pipeline uses:
+
+- Realistic Vision V5.1
+- Stable Diffusion VAE
+- DPM-Solver++ / Karras scheduling
+- Optional xFormers attention
+- Attention slicing
+- Configurable negative prompts
+- Deterministic seeds
+- Optional high-resolution refinement
+- Automatic low-variance image rejection
+
+Configured diffusion classes:
+
+```text
+acne
+vitiligo
+fungal_infection
+normal_skin
+hyperpigmentation
+```
+
+The prompt system uses disease-specific phenotypes and controlled variation across:
+
+- Age
+- Severity
+- Fitzpatrick skin type
+- Anatomical distribution
+- Combined variations
+
+The configuration targets 300 prompts × 5 images per prompt = 1,500 images per configured diffusion class.
+
+### Verify prompts
+
+```bash
+python scripts/run_generation.py --method prompts_only
+```
+
+### Small test generation
+
+```bash
+python scripts/run_generation.py \
+  --method diffusion \
+  --classes acne vitiligo \
+  --limit_prompts 5 \
+  --images_per_prompt 2
+```
+
+### Full configured diffusion generation
+
+```bash
+python scripts/run_generation.py \
+  --method diffusion \
+  --classes acne vitiligo fungal_infection normal_skin hyperpigmentation
+```
+
+---
+
+## 2. StyleGAN2-ADA
+
+Skin Cancer generation is implemented as a separate StyleGAN2-ADA workflow.
+
+It expects:
+
+- An external `stylegan2-ada-pytorch` checkout
+- A StyleGAN network snapshot
+- Optional seed data/configuration
+
+Example:
+
+```bash
+python scripts/run_generation.py \
+  --method stylegan \
+  --network_pkl /path/to/network-snapshot.pkl
+```
+
+The configured Skin Cancer categories are:
+
+```text
+BCC
+SCC
+melanoma
+```
+
+Large datasets, generated images, model weights and the external StyleGAN repository are intentionally excluded from Git.
+
+---
+
+# Evaluation
+
+Run:
+
+```bash
+python scripts/run_evaluation.py \
+  --data_dir data/Real_data \
+  --save_dir outputs/saved_models \
+  --plot_dir outputs/plots
+```
+
+## Metrics
+
+The evaluation subsystem computes:
+
+- Accuracy
+- Macro-F1
+- Weighted-F1
+- Cohen's Kappa
+- Matthews Correlation Coefficient
+- Macro One-vs-Rest AUC-ROC
+- Per-class precision
+- Per-class recall
+- Per-class F1
+
+Visualizations include:
+
+- Confusion matrices
+- Normalized confusion matrices
+- ROC curves
+- Training curves
+- Per-class metric charts
+- Model comparison dashboard
+- Radar chart
+
+---
+
+# Weighted Ensemble
+
+The `WeightedEnsemble` module loads saved `*_final.keras` models and combines their probability outputs.
+
+Current implementation:
+
+```text
+Individual model predictions
+          │
+          ▼
+Test-set accuracy per model
+          │
+          ▼
+Normalize accuracies → ensemble weights
+          │
+          ▼
+Weighted probability average
+          │
+          ▼
+Final class = argmax(probabilities)
+```
+
+> **Experimental caution:** the current implementation derives ensemble weights from the same held-out test set used for ensemble evaluation. For publication-grade evaluation, ensemble weights should be selected using validation data and the test set should remain untouched until final reporting.
+
+---
+
+# Inference
+
+Run inference on one image:
+
+```bash
+python scripts/run_inference.py \
+  --image_path path/to/sample_image.jpg \
+  --model_path outputs/saved_models/ResNet50_final.keras \
+  --label_map outputs/saved_models/label_map.json \
+  --save_plot outputs/plots/prediction.png
+```
+
+The inference engine:
+
+1. Loads the trained Keras checkpoint.
+2. Resizes the image to `224 × 224`.
+3. Applies the model's internal preprocessing.
+4. Produces the predicted class.
+5. Returns the confidence and complete probability vector.
+6. Can save a prediction visualization.
+
+### Run all saved models
+
+```bash
+python scripts/run_inference.py \
+  --image_path path/to/sample_image.jpg \
+  --model_path all
+```
+
+---
+
+# Notebooks
+
+## Modular Pipeline
+
+`Note books/Modular_Pipeline.ipynb`
+
+Covers:
+
+- Dataset discovery
+- Cleaning
+- Stratified splitting
+- Balancing
+- `tf.data` construction
+- Augmentation
+- Transfer learning
+- Evaluation
+- Ensemble loading
+- Inference
+
+Run:
+
 ```bash
 jupyter lab "Note books/Modular_Pipeline.ipynb"
 ```
 
-### 2. `Note books/Notebook.ipynb`
-Comprehensive experimental notebook demonstrating the supported classification architectures and evaluation workflow:
-- Demonstrates the supported classification architectures: EfficientNetV2-B0, ResNet-50, DenseNet-121, MobileNetV3-Large.
-- Demonstrates model training, evaluation, class-imbalance handling, and cross-model evaluation workflows..
+## Experimental Benchmark
 
-**To run:**
+`Note books/Notebook.ipynb`
+
+Contains the broader multi-architecture experimental workflow.
+
+Run:
+
 ```bash
 jupyter lab "Note books/Notebook.ipynb"
 ```
 
+For new experiments, the modular pipeline and CLI scripts are recommended.
+
 ---
 
-## Using the Command-Line Scripts
+# Reproducibility
 
-All pipeline stages can also be executed directly via command-line scripts in `scripts/`:
+Run the verification suite:
 
-### 1. Verification
-To verify that all modules, prompt files, custom layers, and dependencies are functional:
 ```bash
 python scripts/verify_reproducibility.py
 ```
 
-### 2. Synthetic Data Generation
-Generate synthetic dermatological samples using prompt manifests:
-```bash
-# Verify prompt manifests without GPU generation
-python scripts/run_generation.py --method prompts_only
+The verification workflow checks:
 
-# Generate sample images using Latent Diffusion
-python scripts/run_generation.py --method diffusion --classes acne vitiligo --limit_prompts 5 --images_per_prompt 2
+- Prompt manifests
+- Synthetic generation
+- GAN smoke-test behavior
+- Data utilities
+- Custom preprocessing layers
+- Focal Loss
+- Evaluation utilities
+- Visualization
+- Repository storage hygiene
 
-# Full generation across all classes
-python scripts/run_generation.py --method diffusion --classes acne vitiligo fungal_infection normal_skin hyperpigmentation
+Reproducibility features include:
 
-# Sample from trained StyleGAN2-ADA snapshot for Skin Cancer
-python scripts/run_generation.py --method stylegan --network_pkl /path/to/network-snapshot.pkl
+- Fixed dataset split seed: `42`
+- Stable prompt-derived generation seeds
+- Centralized configuration
+- Serialized `label_map.json`
+- Large-artifact exclusion through `.gitignore`
+
+---
+
+# Output Artifacts
+
+Typical outputs include:
+
+```text
+outputs/
+├── saved_models/
+│   ├── <Model>_final.keras
+│   ├── <Model>_best.keras
+│   ├── <Model>_training_log.csv
+│   ├── label_map.json
+│   ├── model_comparison.csv
+│   └── model_comparison_with_ensemble.csv
+│
+├── plots/
+│   ├── class_distribution.png
+│   ├── sample_images.png
+│   ├── <Model>_training_curves.png
+│   ├── <Model>_confusion_matrix.png
+│   ├── <Model>_roc_curves.png
+│   ├── <Model>_per_class_metrics.png
+│   ├── model_comparison_dashboard.png
+│   └── model_radar_chart.png
+│
+└── synthetic_dataset/
+    ├── <class>/
+    └── metadata/
 ```
 
-### 3. Model Training
-Train neural backbones using the 3-phase progressive unfreezing protocol:
-```bash
-# Train a specific backbone (options: EfficientNetV2B0, ResNet50, DenseNet121, MobileNetV3Large, ViT_B16)
-python scripts/run_training.py --data_dir data/Real_data --model ResNet50 --batch_size 32
+These runtime artifacts are ignored by Git.
 
-# Train all backbones sequentially
-python scripts/run_training.py --data_dir data/Real_data --model all
-```
+---
 
-Optional training arguments:
-- `--epochs_p1`: Epochs for Phase 1 warmup (default: `15`).
-- `--epochs_p2`: Epochs for Phase 2 partial unfreezing (default: `25`).
-- `--epochs_p3`: Epochs for Phase 3 deep fine-tuning (default: `30`).
-- `--save_dir`: Directory to save trained `.keras` checkpoints (default: `outputs/saved_models`).
-- `--plot_dir`: Directory to save training plots (default: `outputs/plots`).
+# External Dependencies and Models
 
-### 4. Evaluation and Ensembling
-Evaluate saved model checkpoints on the test split and compute the soft-voting ensemble metrics:
-```bash
-python scripts/run_evaluation.py \
-    --data_dir data/Real_data \
-    --save_dir outputs/saved_models \
-    --plot_dir outputs/plots
-```
+| Component | Requirement |
+|---|---|
+| TensorFlow/Keras | CNN training and inference |
+| PyTorch | Generative pipeline |
+| Diffusers | Stable Diffusion / Realistic Vision generation |
+| Transformers | Transformer ecosystem support |
+| scikit-learn | Splitting, metrics and class weighting |
+| Pillow | Image loading and validation |
+| StyleGAN2-ADA | External repository for StyleGAN workflow |
+| Realistic Vision V5.1 | External pretrained diffusion model |
+| Stable Diffusion VAE | External pretrained VAE |
 
-### 5. Standalone Image Inference
-Run inference on a single test image using a saved model checkpoint:
-```bash
-python scripts/run_inference.py \
-    --image_path path/to/sample_image.jpg \
-    --model_path outputs/saved_models/ResNet50_final.keras \
-    --label_map outputs/saved_models/label_map.json \
-    --save_plot outputs/plots/prediction.png
-```
+---
+
+# Research Limitations
+
+### Dataset dependence
+
+Performance depends on the quality, labeling, demographic diversity, acquisition conditions and clinical representativeness of the supplied dataset.
+
+### Clinical deployment
+
+This repository has not established clinical validity, regulatory compliance, treatment efficacy, or diagnostic safety.
+
+---
 
 
-## License
+# License
 
-This project is released under the [MIT License](LICENSE).
+Released under the **MIT License**.
+
+See [`LICENSE`](LICENSE) for details.
+
+---
+
+
