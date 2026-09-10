@@ -1,8 +1,5 @@
 # Facial Skin Disease Classification and Synthetic Data Generation
 
-Official code and experimental notebooks accompanying the research paper:
-> **"Enhancing Facial Skin Disease Detection Through Synthetic Data Generation Using Diffusion Models, GANs, and Pre-Trained CNN Architectures"**
-
 This repository contains the complete experimental pipeline, including synthetic image generation manifests, transfer learning workflows for deep neural backbones, soft-voting ensemble evaluation, and reproducible Jupyter notebooks.
 
 ---
