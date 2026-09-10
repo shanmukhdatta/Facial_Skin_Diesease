@@ -215,21 +215,6 @@ python scripts/run_inference.py \
     --save_plot outputs/plots/prediction.png
 ```
 
----
-
-## Paper Reference
-
-If you use this codebase or notebooks in your research, please cite:
-
-```bibtex
-@article{facial_skin_disease_synthetic_generation,
-  title   = {Enhancing Facial Skin Disease Detection Through Synthetic Data Generation Using Diffusion Models, GANs, and Pre-Trained CNN Architectures},
-  author  = {Boda, Shanmukha Datta},
-  year    = {2026}
-}
-```
-
----
 
 ## License
 
