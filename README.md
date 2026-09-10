@@ -11,9 +11,7 @@ This repository contains the complete experimental pipeline, including synthetic
 
 ```
 Facial_Skin_Disease_Synthetic_Generation/
-├── Note books/
-│   ├── Modular_Pipeline.ipynb        # Interactive step-by-step pipeline using the modular src/ package
-│   └── Notebook.ipynb                # Complete experimental benchmark notebook (all models & comparisons)
+└── Notebook.ipynb                # Comprehensive experimental notebook demonstrating the supported classification architectures and evaluation workflow
 │
 ├── configs/
 │   ├── config.py                     # Central configuration dataclass (paths, hyperparameters, splits)
@@ -60,9 +58,6 @@ Facial_Skin_Disease_Synthetic_Generation/
 │   ├── run_inference.py              # Script to perform inference on input images
 │   └── verify_reproducibility.py     # Script to verify environment, pipeline modules, and configs
 │
-├── Papper/
-│   ├── main.tex                      # Research manuscript source in LaTeX
-│   └── figures/                      # Manuscript figures, architecture diagrams, and charts
 │
 ├── requirements.txt                  # Python package dependencies
 ├── LICENSE                           # MIT License
@@ -81,8 +76,8 @@ Facial_Skin_Disease_Synthetic_Generation/
 
 1. **Clone the repository:**
    ```bash
-   git clone https://github.com/<your-username>/Facial_Skin_Disease_Synthetic_Generation.git
-   cd Facial_Skin_Disease_Synthetic_Generation
+    git clone https://github.com/shanmukhdatta/Facial_Skin_Diesease.git
+   cd Facial_Skin_Diesease
    ```
 
 2. **Create and activate a virtual environment:**
@@ -142,9 +137,9 @@ jupyter lab "Note books/Modular_Pipeline.ipynb"
 ```
 
 ### 2. `Note books/Notebook.ipynb`
-The comprehensive experimental benchmark notebook:
-- Contains end-to-end execution of all evaluated architectures: EfficientNetV2-B0, ResNet-50, DenseNet-121, MobileNetV3-Large, and Vision Transformer (ViT-B16).
-- Executes comparative training benchmarks, class-imbalance mitigations, and cross-model performance analyses.
+Comprehensive experimental notebook demonstrating the supported classification architectures and evaluation workflow:
+- Demonstrates the supported classification architectures: EfficientNetV2-B0, ResNet-50, DenseNet-121, MobileNetV3-Large.
+- Demonstrates model training, evaluation, class-imbalance handling, and cross-model evaluation workflows..
 
 **To run:**
 ```bash
