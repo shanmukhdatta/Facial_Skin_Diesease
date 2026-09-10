@@ -1,0 +1,64 @@
+# Byte-compiled / optimized files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Environments
+.venv/
+venv/
+env/
+ENV/
+
+# Model Checkpoints & Large Weights (Do not commit to Git - save to HuggingFace/Cloud)
+*.keras
+*.h5
+*.hdf5
+*.pkl
+*.pt
+*.pth
+*.safetensors
+*.bin
+*.ckpt
+*.onnx
+*.tflite
+checkpoints/
+saved_models/
+training-runs/
+stylegan2-ada-pytorch/
+
+# Datasets and Large Zip Archives
+/data/
+/datasets/
+skin_cancer_seed/
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.7z
+
+# Runtime outputs and logs
+outputs/
+logs/
+*.log
+
+# Jupyter Notebook Checkpoints
+.ipynb_checkpoints/
+*-checkpoint.ipynb
+*_cleaned.ipynb
+
+# Paper manuscript and draft files (kept locally, ignored by Git)
+Papper/
+paper/
+*.aux
+*.out
+*.synctex.gz
+
+# Operating System & IDE configs
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+
+Notebooks/

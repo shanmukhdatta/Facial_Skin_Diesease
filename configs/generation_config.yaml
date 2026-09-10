@@ -1,0 +1,124 @@
+# =============================================================================
+# generation_config.yaml -- Synthetic Facial Skin Disease Generation Config
+# Matches the disease-adaptive generative framework (Section 3.2 of the paper):
+#   - 5 classes via Realistic Vision V5.1 (Latent Diffusion): 7,500 images
+#   - 1 class via StyleGAN2-ADA (Skin Cancer): 1,500 images
+#   - Total: 9,000 synthetic images
+# =============================================================================
+
+diffusion:
+  model:
+    model_id: "SG161222/Realistic_Vision_V5.1_noVAE"
+    vae_id: "stabilityai/sd-vae-ft-mse"
+    scheduler: "dpmsolver++"          # dpmsolver++ | euler_a | ddim
+    torch_dtype: "fp16"               # fp16 | fp32
+    device: "cuda"                    # cuda | cpu | mps
+    enable_xformers: true
+    enable_attention_slicing: true
+    enable_vae_tiling: false
+    safety_checker: true
+
+  generation:
+    image_size: 512
+    hires_fix: true                   # optional 2-stage img2img upscale pass
+    hires_scale: 1.5
+    hires_strength: 0.35
+    hires_steps: 20
+    num_inference_steps: 40
+    guidance_scale: 7.5
+    images_per_prompt: 5              # 300 prompts x 5 images = 1,500 images/class
+    seed_base: 42
+    max_retries_per_image: 3
+    negative_prompt: >
+      cartoon, illustration, painting, drawing, anime, 3d render, cgi render, doll,
+      plastic skin, unrealistic, deformed, disfigured, mutated, extra limbs,
+      extra fingers, missing fingers, fused fingers, bad anatomy, bad hands,
+      poorly drawn face, asymmetrical eyes, cross-eyed, blurry, out of focus,
+      low resolution, low quality, jpeg artifacts, pixelated, watermark, text,
+      signature, logo, username, caption, grainy, noisy, overexposed, underexposed,
+      harsh shadows, duplicate, tiling, collage, multiple faces, frame, border,
+      monochrome, black and white, sketch, unnatural skin texture, waxy skin,
+      airbrushed, over-smoothed skin, uncanny valley, mannequin
+
+  classes:
+    - acne
+    - vitiligo
+    - fungal_infection
+    - normal_skin
+    - hyperpigmentation
+
+  paths:
+    prompts_dir: "prompts"
+    output_dir: "outputs/synthetic_dataset"
+    metadata_dir: "outputs/synthetic_dataset/metadata"
+    rejected_log: "outputs/synthetic_dataset/metadata/rejected.jsonl"
+
+  prompt_structure:
+    phenotypes_per_class: 3
+    variation_groups: ["age", "severity", "skin_tone", "anatomical_distribution", "combined"]
+    prompts_per_group: 10
+    genders: ["female", "male"]
+    prompts_per_class: 300
+    images_per_class: 1500
+
+  variations:
+    age_ranges:
+      "15-24": [16, 24]
+      "25-39": [26, 38]
+      "40-59": [41, 58]
+    default_age_range: "25-39"
+    severity_levels: ["mild", "moderate", "severe"]
+    default_severity: "moderate"
+    fitzpatrick_types: ["I", "II", "III", "IV", "V", "VI"]
+    default_fitzpatrick: "III"
+
+  quality_control:
+    min_pixel_std: 3.0
+    reject_blank_images: true
+    save_rejected_log: true
+
+stylegan2_ada:
+  paths:
+    stylegan2_ada_repo: "./stylegan2-ada-pytorch"
+    seed_images_dir: "data/skin_cancer_seed"
+    dataset_zip: "data/skin_cancer_512.zip"
+    training_output_dir: "outputs/stylegan_training"
+    network_pkl: ""
+    generated_dir: "outputs/synthetic_dataset/skin_cancer"
+
+  dataset:
+    resolution: 512
+    classes:
+      BCC: 100
+      SCC: 100
+      melanoma: 100
+    mirror: true
+
+  training:
+    gpus: 1
+    batch: 16
+    gamma: 10.0
+    kimg: 3000
+    snap: 10
+    aug: "ada"
+    target: 0.6
+    augpipe: "bgc"
+    metrics: "fid50k_full"
+    seed: 42
+    cfg: "auto"
+    resume_pkl: "https://nvlabs-fi-cdn.nvidia.com/stylegan2-ada-pytorch/pretrained/transfer-learning-source-nets/ffhq-res256-mirror-paper256-noaug.pkl"
+
+  generation:
+    num_images: 1500
+    truncation_psi: 0.7
+    noise_mode: "const"
+    batch_size: 8
+    seed_base: 1000
+    class_split:
+      BCC: 500
+      SCC: 500
+      melanoma: 500
+
+  quality_control:
+    min_pixel_std: 3.0
+    reject_blank_images: true
