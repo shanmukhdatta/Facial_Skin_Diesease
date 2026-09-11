@@ -44,13 +44,36 @@ class WeightedEnsemble:
         return len(self.models)
 
     def evaluate_ensemble(
-        self, test_ds: tf.data.Dataset
+        self, val_ds: tf.data.Dataset, test_ds: tf.data.Dataset
     ) -> Optional[Tuple[Dict[str, float], np.ndarray, np.ndarray]]:
-        """Run soft-voting ensemble prediction and evaluate metrics."""
+        """Run soft-voting ensemble prediction and evaluate metrics.
+
+        Weights are computed from ``val_ds`` (data the ensemble weighting has
+        not been scored against) and the final reported metrics are computed
+        purely on ``test_ds``, so the same split is never used for both.
+        """
         if len(self.models) < 2:
             print("[WARN] Need at least 2 loaded models to build an ensemble.")
             return None
 
+        # --- Step 1: compute performance-based weights on the VALIDATION set ---
+        y_val = []
+        val_probs_list = [[] for _ in self.models]
+
+        for images, labels in val_ds:
+            y_val.extend(labels.numpy())
+            for idx, m in enumerate(self.models):
+                val_probs_list[idx].extend(m.predict(images, verbose=0))
+
+        y_val = np.array(y_val)
+        val_probs_arrays = [np.array(p) for p in val_probs_list]
+
+        accuracies = [(np.argmax(p, axis=1) == y_val).mean() for p in val_probs_arrays]
+        weights = np.array(accuracies)
+        weights = weights / weights.sum()
+        print(f"\nEnsemble weights (from val set): {dict(zip(self.model_names, weights.round(3)))}")
+
+        # --- Step 2: score the weighted ensemble on the held-out TEST set ---
         y_true = []
         probs_list = [[] for _ in self.models]
 
@@ -61,12 +84,6 @@ class WeightedEnsemble:
 
         y_true = np.array(y_true)
         probs_arrays = [np.array(p) for p in probs_list]
-
-        # Performance-based weighting
-        accuracies = [(np.argmax(p, axis=1) == y_true).mean() for p in probs_arrays]
-        weights = np.array(accuracies)
-        weights = weights / weights.sum()
-        print(f"\nEnsemble weights: {dict(zip(self.model_names, weights.round(3)))}")
 
         ensemble_probs = sum(w * p for w, p in zip(weights, probs_arrays))
         y_pred = np.argmax(ensemble_probs, axis=1)
