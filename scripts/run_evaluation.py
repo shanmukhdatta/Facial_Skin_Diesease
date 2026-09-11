@@ -57,10 +57,19 @@ def main():
     print(f"Classes: {class_names}")
     print("======================================================================")
 
-    # Re-create test split
+    # Re-create val/test splits (val is needed for ensemble weighting, test for final scoring)
     df_full, _ = discover_dataset(config.data_dir)
     df_clean = clean_dataset(df_full)
-    _, _, test_df = split_dataset(df_clean, test_size=config.test_size, seed=config.seed)
+    _, val_df, test_df = split_dataset(df_clean, test_size=config.test_size, seed=config.seed)
+
+    val_ds = make_dataset(
+        paths=val_df["path"].values,
+        labels=val_df["label"].values,
+        img_size=config.img_size,
+        batch_size=config.batch_size,
+        augment=False,
+        shuffle=False,
+    )
 
     test_ds = make_dataset(
         paths=test_df["path"].values,
@@ -83,7 +92,7 @@ def main():
         print("[WARN] At least 2 models are needed for ensemble evaluation.")
         return
 
-    ens_results = ensemble.evaluate_ensemble(test_ds)
+    ens_results = ensemble.evaluate_ensemble(val_ds, test_ds)
     if ens_results:
         metrics_dict, _, _ = ens_results
         comp_csv = config.save_dir / "model_comparison.csv"
