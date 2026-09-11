@@ -525,19 +525,19 @@ Current implementation:
 Individual model predictions
           │
           ▼
-Test-set accuracy per model
+Validation-set accuracy per model
           │
           ▼
 Normalize accuracies → ensemble weights
           │
           ▼
-Weighted probability average
+Weighted probability average (applied to test-set predictions)
           │
           ▼
-Final class = argmax(probabilities)
+Final class = argmax(probabilities), scored on the held-out test set
 ```
 
-> **Experimental caution:** the current implementation derives ensemble weights from the same held-out test set used for ensemble evaluation. For publication-grade evaluation, ensemble weights should be selected using validation data and the test set should remain untouched until final reporting.
+> Ensemble weights are computed from the validation set only. The test set is used exclusively for final scoring and never influences the weights, avoiding data leakage between weight selection and evaluation.
 
 ---
 
