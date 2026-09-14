@@ -209,6 +209,48 @@ class PromptBuilder:
         return entries
 
 
+# --------------------------------------------------------------------------- #
+# Final-prompt post-processing (Section 5b of the Kaggle generation notebook)
+# --------------------------------------------------------------------------- #
+# Every prompt actually sent to the diffusion model has this short photorealistic
+# prefix prepended, and the repo's own generic trailing clause (which starts with
+# GENERIC_TRAILING_ANCHOR) stripped so it isn't duplicated. The strip only fires when
+# that anchor text runs, uninterrupted, all the way to the prompt's final period --
+# if the wording upstream ever changes, nothing is removed and the prefix is simply
+# prepended to the untouched original text, rather than risking a cut of real
+# disease/subtype/severity detail.
+CUSTOM_PROMPT_PREFIX = (
+    "Photorealistic clinical dermatology photograph, "
+    "real human face, natural realistic skin texture, visible pores, "
+    "true-to-life skin color, unretouched skin, single face, "
+    "neutral expression, sharp photographic detail. "
+)
+
+GENERIC_TRAILING_ANCHOR = "Natural facial anatomy"
+
+
+def build_final_prompt(raw_prompt: str, prefix: str = CUSTOM_PROMPT_PREFIX) -> str:
+    """
+    Prepend the photorealistic prefix to a repo-generated prompt.
+
+    Strips the repo's own known generic trailing clause (starting at
+    GENERIC_TRAILING_ANCHOR) ONLY when it matches the exact known template ending
+    (i.e. the anchor text runs, uninterrupted, to the final period). This never
+    touches anything before the anchor -- all disease/subtype/severity/age/
+    Fitzpatrick/location/morphology content from the repo prompt is preserved
+    unchanged. If the anchor isn't found in the expected trailing position, no text
+    is removed -- some duplicated generic wording is accepted rather than risking a
+    cut of real content.
+    """
+    trimmed = raw_prompt
+    anchor_idx = raw_prompt.find(GENERIC_TRAILING_ANCHOR)
+    if anchor_idx != -1:
+        tail = raw_prompt[anchor_idx:]
+        if tail.rstrip().endswith("."):
+            trimmed = raw_prompt[:anchor_idx].rstrip()
+    return f"{prefix}{trimmed}"
+
+
 def load_or_build_prompts(class_name: str, cfg: Dict[str, Any], prompts_dir: Path) -> List[Dict[str, Any]]:
     """Load prompts from `<prompts_dir>/<class>.txt` if present, else build and save."""
     prompts_dir = Path(prompts_dir)

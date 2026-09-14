@@ -3,12 +3,20 @@ tensorflow>=2.15.0
 keras-tuner>=1.4.0
 vit-keras>=0.1.2
 
-# Generative Pipeline (Diffusion & StyleGAN2-ADA)
+# Generative Pipeline -- Diffusion (facial skin disease classes)
 torch>=2.0.0
 torchvision>=0.15.0
 diffusers>=0.26.0
 transformers>=4.38.0
 accelerate>=0.27.0
+
+# Generative Pipeline -- StyleGAN2 (Skin Cancer classes: BCC / SCC / melanoma)
+# lucidrains/stylegan2-pytorch -- NOT NVIDIA's stylegan2-ada-pytorch (that repo is cloned
+# separately and only needed if you use the reference stylegan2_ada config path instead).
+stylegan2_pytorch>=1.9.0
+kornia>=0.7.0
+ImageHash>=4.3.0
+pytorch-fid>=0.3.0
 
 # Scientific, Data & Evaluation
 numpy>=1.24.0

@@ -56,3 +56,64 @@ def evaluate_model(
         "y_pred": y_pred,
         "y_pred_prob": y_pred_prob,
     }
+
+
+def compute_fid_for_classes(
+    real_dirs: Dict[str, str],
+    generated_dirs: Dict[str, str],
+    dims: int = 192,
+    device: str = "cuda",
+) -> Dict[str, float]:
+    """
+    Frechet Inception Distance between real and generated images, per class (Section
+    3.2.2 evaluation of the Skin Cancer synthetic classes). Mirrors the FID cell in the
+    GAN generation notebook exactly.
+
+    Uses a lower-dimensional Inception feature block (`dims`) than the library default
+    of 2048 -- pytorch-fid's own README recommends this for datasets much smaller than
+    the ~2048 images/side its default features were tuned for; with only ~100 real
+    images per class here, the default would be far noisier. Treat the returned scores
+    as a *relative* signal for comparing your own classes/checkpoints against each
+    other, not as an absolute number comparable to FID scores reported in papers
+    trained on thousands of images per class.
+
+    Args:
+        real_dirs: {class_name: path_to_real_images_dir}
+        generated_dirs: {class_name: path_to_generated_images_dir}
+        dims: Inception feature block size (192, 768, 2048, ...).
+        device: "cuda" or "cpu".
+
+    Returns:
+        {class_name: fid_value} for every class with >=2 images on both sides.
+    """
+    from pathlib import Path
+
+    from pytorch_fid.fid_score import calculate_fid_given_paths
+
+    fid_scores: Dict[str, float] = {}
+    for class_name, real_dir in real_dirs.items():
+        gen_dir = generated_dirs.get(class_name)
+        if gen_dir is None:
+            continue
+
+        n_real = len(list(Path(real_dir).glob("*")))
+        n_fake = len(list(Path(gen_dir).glob("*")))
+        if n_real < 2 or n_fake < 2:
+            print(f"[fid] skipping '{class_name}' -- need >=2 images on each side "
+                  f"(real={n_real}, generated={n_fake}).")
+            continue
+
+        batch_size = min(50, n_real, n_fake)
+        try:
+            fid_value = calculate_fid_given_paths(
+                [str(real_dir), str(gen_dir)],
+                batch_size=batch_size,
+                device=device,
+                dims=dims,
+            )
+            fid_scores[class_name] = fid_value
+            print(f"[fid] '{class_name}': FID = {fid_value:.2f} ({n_real} real vs {n_fake} generated, dims={dims})")
+        except Exception as e:
+            print(f"[fid] '{class_name}': computation failed ({e}) -- skipping.")
+
+    return fid_scores

@@ -20,6 +20,34 @@ class ProjectConfig:
             )
         )
     )
+    # Synthetic dataset root: 5 prompt-generated classes (Acne, Fungal Infection,
+    # Hyperpigmentation, Normal Skin, Vitiligo) + BCC/SCC/MEL Skin Cancer images.
+    synthetic_data_dir: Path = field(
+        default_factory=lambda: Path(
+            os.getenv(
+                "SYNTHETIC_DATA_DIR",
+                "/kaggle/input/datasets/shanmukhadattaboda/facial-skin-diesease-dataset/Face_Dataset"
+                if Path("/kaggle/input").exists()
+                else str(Path(__file__).resolve().parent.parent / "data" / "Face_Dataset"),
+            )
+        )
+    )
+    # Real dataset root: same class-name set as synthetic_data_dir, real photos.
+    real_data_dir: Path = field(
+        default_factory=lambda: Path(
+            os.getenv(
+                "REAL_DATA_DIR",
+                "/kaggle/input/datasets/shanmukhadattaboda/real-skin-diesease-images/Real_Dataset"
+                if Path("/kaggle/input").exists()
+                else str(Path(__file__).resolve().parent.parent / "data" / "Real_Dataset"),
+            )
+        )
+    )
+    # Fraction of each class's FINAL combined TRAIN split drawn from real images
+    # (the rest drawn from synthetic). Val/Test always use 100% of both sources'
+    # val/test partitions, never fractioned. Set real_fraction=None to skip the
+    # combined pipeline and fall back to the legacy single-source split_dataset().
+    real_fraction: float = 0.50
     save_dir: Path = field(
         default_factory=lambda: Path(
             os.getenv("SAVE_DIR", "/kaggle/working/saved_models" if Path("/kaggle").exists() else str(Path(__file__).resolve().parent.parent / "outputs" / "saved_models"))

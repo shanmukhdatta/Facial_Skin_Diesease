@@ -2,8 +2,13 @@
 # generation_config.yaml -- Synthetic Facial Skin Disease Generation Config
 # Matches the disease-adaptive generative framework (Section 3.2 of the paper):
 #   - 5 classes via Realistic Vision V5.1 (Latent Diffusion): 7,500 images
-#   - 1 class via StyleGAN2-ADA (Skin Cancer): 1,500 images
+#   - 3 classes via StyleGAN2 (stylegan2_pytorch, one independent model per class,
+#     Skin Cancer: BCC / SCC / melanoma): 1,500 images (500/class)
 #   - Total: 9,000 synthetic images
+#
+# See `diffusion:` below for the actual seeding/prompt/negative-prompt values used to
+# generate the published dataset, and `stylegan2:` (NOT `stylegan2_ada`, kept only for
+# reference) for the actual Skin Cancer training/generation method.
 # =============================================================================
 
 diffusion:
@@ -20,25 +25,65 @@ diffusion:
 
   generation:
     image_size: 512
-    hires_fix: true                   # optional 2-stage img2img upscale pass
+    hires_fix: false                  # NOTE: the Kaggle run's pipeline subclass never built
+                                       # the hires img2img pass, so it never fired for the
+                                       # published dataset even though this was true before --
+                                       # set to true only if you also restore hires_pipe
+                                       # construction in DiffusionGenerator.load_pipeline().
     hires_scale: 1.5
     hires_strength: 0.35
     hires_steps: 20
     num_inference_steps: 40
     guidance_scale: 7.5
     images_per_prompt: 5              # 300 prompts x 5 images = 1,500 images/class
-    seed_base: 42
+    seed_base: 42                     # unused by the actual run -- see `seeding:` below,
+                                       # which is the formula that really produced the dataset
     max_retries_per_image: 3
+    # Prefix prepended to every prompt before generation (see src/generation/prompts.py::
+    # build_final_prompt -- also strips the repo's own trailing "Natural facial anatomy..."
+    # clause so it isn't duplicated after this prefix).
+    prompt_prefix: >
+      Photorealistic clinical dermatology photograph, real human face, natural realistic
+      skin texture, visible pores, true-to-life skin color, unretouched skin, single face,
+      neutral expression, sharp photographic detail.
+    # Actual negative prompt used for every image in the published dataset (this differs
+    # from an earlier draft of this file -- it was never applied, the text below is).
     negative_prompt: >
-      cartoon, illustration, painting, drawing, anime, 3d render, cgi render, doll,
-      plastic skin, unrealistic, deformed, disfigured, mutated, extra limbs,
-      extra fingers, missing fingers, fused fingers, bad anatomy, bad hands,
-      poorly drawn face, asymmetrical eyes, cross-eyed, blurry, out of focus,
-      low resolution, low quality, jpeg artifacts, pixelated, watermark, text,
-      signature, logo, username, caption, grainy, noisy, overexposed, underexposed,
-      harsh shadows, duplicate, tiling, collage, multiple faces, frame, border,
-      monochrome, black and white, sketch, unnatural skin texture, waxy skin,
-      airbrushed, over-smoothed skin, uncanny valley, mannequin
+      cartoon, illustration, painting, anime, CGI, 3D render, digital art,
+      beauty photography, glamour portrait, fashion photography,
+      plastic skin, waxy skin, porcelain skin, airbrushed skin,
+      oversmoothed skin, artificial skin texture,
+      split face, half face, duplicate face, double face, duplicate person,
+      extra eyes, malformed eyes, distorted facial anatomy, deformed features,
+      unrealistic lesions, exaggerated lesions, giant lesions,
+      excessive glow, oversaturated skin,
+      blurry, low detail, low quality, noise, watermark, text, logo, collage
+
+  # Per-class deterministic seed formula actually used to generate every image in the
+  # published dataset (src/generation/diffusion_generator.py::DiffusionGenerator.run_class).
+  # This is a POSITIONAL formula keyed on (prompt_number, variation_index) -- it
+  # intentionally overrides each prompt's own content-derived `seed_base` from
+  # src/generation/prompts.py::PromptBuilder.
+  #   seed = (selected_seeds[class] + (prompt_num-1)*prompt_seed_step + (v-1)*variation_seed_step) % 2**32
+  #   retry_seed = (seed + retry * retry_offset) % 2**32
+  seeding:
+    selected_seeds:
+      acne: 42
+      vitiligo: 1000
+      fungal_infection: 789
+      normal_skin: 42
+      hyperpigmentation: 42
+    prompt_seed_step: 7919
+    variation_seed_step: 104729
+    retry_offset: 15485863
+
+  # Maps each class to the number used in output filenames: cls{class_index:02d}_p_{prompt#:03d}_v_{i}.png
+  class_index:
+    acne: 1
+    vitiligo: 2
+    fungal_infection: 3
+    normal_skin: 4
+    hyperpigmentation: 5
 
   classes:
     - acne
@@ -77,6 +122,70 @@ diffusion:
     reject_blank_images: true
     save_rejected_log: true
 
+# -----------------------------------------------------------------------------------
+# stylegan2 -- Skin Cancer synthetic class (BCC / SCC / melanoma), Section 3.2.2
+#
+# This is the `stylegan2_pytorch` PyPI package (lucidrains/stylegan2-pytorch), NOT
+# NVIDIA's official stylegan2-ada-pytorch -- that's a different library with a different
+# CLI and no relation to the config below. Trains ONE INDEPENDENT, UNCONDITIONAL MODEL
+# PER CLASS (not a single combined/conditional model), each within a Kaggle-GPU-session
+# time budget. See src/generation/stylegan_trainer.py::StyleGAN2PyTorchTrainer and
+# src/generation/stylegan_generator.py::StyleGAN2PyTorchGenerator.
+#
+# (An alternative NVIDIA-ADA-based path is kept for reference under the `stylegan2_ada`
+# key further down -- it was NOT used to produce the published dataset.)
+# -----------------------------------------------------------------------------------
+stylegan2:
+  paths:
+    input_root: "data/skin_cancer_seed"   # one subfolder per class: BCC/, SCC/, melanoma/
+    models_dir: "outputs/stylegan_training/models"
+    results_dir: "outputs/stylegan_training/results"
+    generated_dir: "outputs/synthetic_dataset/skin_cancer"
+
+  dataset:
+    classes: ["BCC", "SCC", "melanoma"]
+    image_size: 256          # must be a power of 2
+
+  training:
+    network_capacity: 16
+    batch_size: 4
+    gradient_accumulate_every: 8
+    num_train_steps: 50000        # ceiling only -- auto-shrunk to fit the time budget
+    aug_prob: 0.4
+    aug_types: "[translation,cutout,color]"
+    attn_layers: "[]"
+    calibration_steps: 50         # short timed run used to measure real steps/sec
+    min_viable_steps: 1500        # floor: below this, low-data GANs tend to just produce noise
+    chunk_steps: 250              # train in small increments so budget is checked often
+    total_time_budget_hours: 5.5  # whole run (train + generate + zip), kept under Kaggle's ~9h cap
+    generation_reserve_hours: 0.75
+    training_safety_margin: 0.80  # only plan training for 80% of the measured-achievable steps
+
+  generation:
+    images_per_class_target: 500     # -> 1,500 total across the 3 classes
+    truncation_psi: 0.75
+    seed_base: 1000
+    batch_size: 16
+    max_phash_distance: 4                # perceptual-hash de-dup threshold
+    max_resample_attempts_multiplier: 6  # max_resample_attempts = target_count * this
+
+  quality_control:
+    min_pixel_std: 5.0
+    reject_blank_images: true
+
+  evaluation:
+    fid_dims: 192   # lower-dim Inception block -- more stable than the default 2048 with
+                    # the ~100-real-image-per-class seed set used here (see
+                    # pytorch-fid's own README for this recommendation on small datasets).
+                    # Read this as a relative signal across your own classes/checkpoints,
+                    # not an absolute score comparable to papers trained on thousands of images.
+
+# -----------------------------------------------------------------------------------
+# stylegan2_ada -- kept for reference only. NOT the implementation used to produce this
+# repo's published Skin Cancer images (see `stylegan2` above). Describes an alternative
+# single class-conditional-or-combined model trained via NVIDIA's official
+# stylegan2-ada-pytorch, loaded from a .pkl network snapshot.
+# -----------------------------------------------------------------------------------
 stylegan2_ada:
   paths:
     stylegan2_ada_repo: "./stylegan2-ada-pytorch"

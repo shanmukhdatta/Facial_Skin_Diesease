@@ -4,6 +4,9 @@ from src.data.dataset import (
     is_valid_image,
     clean_dataset,
     split_dataset,
+    split_real_stratified,
+    split_synthetic_grouped,
+    mix_train_pools,
     balance_dataset,
 )
 from src.data.pipeline import (
@@ -21,6 +24,9 @@ __all__ = [
     "is_valid_image",
     "clean_dataset",
     "split_dataset",
+    "split_real_stratified",
+    "split_synthetic_grouped",
+    "mix_train_pools",
     "balance_dataset",
     "build_augmentation_layer",
     "make_dataset",

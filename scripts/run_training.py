@@ -20,7 +20,16 @@ MODEL_SPECS = {
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Train Face Skin Disease Classification Models.")
-    parser.add_argument("--data_dir", type=str, default=None, help="Path to Real_data directory.")
+    parser.add_argument("--data_dir", type=str, default=None,
+                         help="Path to a single dataset dir (legacy single-source mode).")
+    parser.add_argument("--synthetic_data_dir", type=str, default=None,
+                         help="Path to synthetic dataset root (combined mode).")
+    parser.add_argument("--real_data_dir", type=str, default=None,
+                         help="Path to real dataset root (combined mode).")
+    parser.add_argument("--real_fraction", type=float, default=None,
+                         help="Fraction of each class's TRAIN split drawn from real images "
+                              "(0-1). Set to enable combined synthetic+real training. "
+                              "If omitted, legacy single-source split_dataset() is used.")
     parser.add_argument(
         "--model",
         type=str,
@@ -45,6 +54,9 @@ def main():
             discover_dataset,
             clean_dataset,
             split_dataset,
+            split_real_stratified,
+            split_synthetic_grouped,
+            mix_train_pools,
             balance_dataset,
         )
         from src.data.pipeline import make_dataset
@@ -72,6 +84,12 @@ def main():
 
     if args.data_dir:
         config.data_dir = Path(args.data_dir)
+    if args.synthetic_data_dir:
+        config.synthetic_data_dir = Path(args.synthetic_data_dir)
+    if args.real_data_dir:
+        config.real_data_dir = Path(args.real_data_dir)
+    if args.real_fraction is not None:
+        config.real_fraction = args.real_fraction
     if args.save_dir:
         config.save_dir = Path(args.save_dir)
     if args.plot_dir:
@@ -89,15 +107,50 @@ def main():
     print(f"Plot Dir: {config.plot_dir}")
     print("======================================================================")
 
-    # 1. Discover & Validate Dataset
-    df_full, class_names = discover_dataset(config.data_dir)
-    config.num_classes = len(class_names)
+    use_combined_pipeline = config.real_fraction is not None and config.synthetic_data_dir and config.real_data_dir
 
-    # 2. Clean Corrupt Files
-    df_clean = clean_dataset(df_full)
+    if use_combined_pipeline:
+        # ── Combined synthetic + real pipeline ──────────────────────────────
+        # 1. Discover both dataset roots (must expose the identical class set).
+        df_full_synth, class_names = discover_dataset(config.synthetic_data_dir)
+        df_full_real, class_names_real = discover_dataset(config.real_data_dir)
+        assert class_names == class_names_real, (
+            f"[ERROR] Class name mismatch between datasets!\n"
+            f"  Synthetic : {class_names}\n  Real      : {class_names_real}"
+        )
+        config.num_classes = len(class_names)
 
-    # 3. Stratified Split (No Leakage)
-    train_df_raw, val_df, test_df = split_dataset(df_clean, test_size=config.test_size, seed=config.seed)
+        # 2. Clean corrupt files, independently per source.
+        df_clean_synth = clean_dataset(df_full_synth)
+        df_clean_real = clean_dataset(df_full_real)
+
+        # 3a. Synthetic: prompt-ID GROUP split for the 5 prompt classes, PLAIN
+        #     per-subtype split (no stratify) for Skin Cancer BCC/SCC/MEL.
+        train_df_synth, val_df_synth, test_df_synth = split_synthetic_grouped(
+            df_clean_synth, test_size=config.test_size, seed=config.seed
+        )
+        # 3b. Real: plain per-class STRATIFIED split.
+        train_df_real, val_df_real, test_df_real = split_real_stratified(
+            df_clean_real, test_size=config.test_size, seed=config.seed
+        )
+        # 3c. Mix TRAIN only, per class, by real_fraction. Val/Test are the
+        #     full union of both sources' val/test (never fractioned).
+        train_df_raw = mix_train_pools(
+            train_df_synth, train_df_real, real_fraction=config.real_fraction, seed=config.seed
+        )
+        val_df = pd.concat([val_df_synth, val_df_real], ignore_index=True)
+        test_df = pd.concat([test_df_synth, test_df_real], ignore_index=True)
+    else:
+        # ── Legacy single-source pipeline (unchanged) ───────────────────────
+        # 1. Discover & Validate Dataset
+        df_full, class_names = discover_dataset(config.data_dir)
+        config.num_classes = len(class_names)
+
+        # 2. Clean Corrupt Files
+        df_clean = clean_dataset(df_full)
+
+        # 3. Stratified Split (No Leakage)
+        train_df_raw, val_df, test_df = split_dataset(df_clean, test_size=config.test_size, seed=config.seed)
 
     # 4. Balance Train Split Only (Post-Split)
     train_target = int(round(train_df_raw["class"].value_counts().mean()))

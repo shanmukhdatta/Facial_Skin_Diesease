@@ -21,7 +21,7 @@
 
 This project combines two complementary research workflows:
 
-1. **Synthetic data generation** — controlled generation of facial skin-condition images using structured prompts and diffusion models, with a separate StyleGAN2-ADA path for Skin Cancer.
+1. **Synthetic data generation** — controlled generation of facial skin-condition images using structured prompts and diffusion models, with a separate per-class StyleGAN2 (`stylegan2_pytorch`) path for Skin Cancer.
 2. **Deep image classification** — preprocessing, quality control, leakage-aware splitting, training-set balancing, transfer learning, progressive fine-tuning, comprehensive evaluation, ensemble prediction, and standalone inference.
 
 The codebase is organized as reusable Python modules under `src/`, configuration under `configs/`, CLI entry points under `scripts/`, prompt manifests under `prompts/`, and experimental notebooks under `Note books/`.
@@ -45,7 +45,7 @@ The codebase is organized as reusable Python modules under `src/`, configuration
 | Evaluation | Accuracy, Macro-F1, Weighted-F1, AUC-ROC, Cohen's Kappa, MCC |
 | Ensemble | Accuracy-weighted soft voting |
 | Inference | Single-image prediction and probability visualization |
-| Generation | Realistic Vision V5.1 + optional StyleGAN2-ADA |
+| Generation | Realistic Vision V5.1 (5 disease classes) + StyleGAN2 via `stylegan2_pytorch`, one independent model per class (Skin Cancer: BCC / SCC / melanoma) |
 | Reproducibility | Fixed seeds, centralized configuration and verification suite |
 
 ---
@@ -448,22 +448,31 @@ python scripts/run_generation.py \
 
 ---
 
-## 2. StyleGAN2-ADA
+## 2. StyleGAN2 (Skin Cancer)
 
-Skin Cancer generation is implemented as a separate StyleGAN2-ADA workflow.
+Skin Cancer generation trains **one independent, unconditional model per class**
+(BCC / SCC / melanoma) using the `stylegan2_pytorch` PyPI package
+(lucidrains/stylegan2-pytorch) — no external repository checkout needed, just
+`pip install -r requirements.txt`. Each class's seed images live under
+`configs/generation_config.yaml` → `stylegan2.paths.input_root`, one subfolder per class:
 
-It expects:
+```text
+data/skin_cancer_seed/
+├── BCC/
+├── SCC/
+└── melanoma/
+```
 
-- An external `stylegan2-ada-pytorch` checkout
-- A StyleGAN network snapshot
-- Optional seed data/configuration
-
-Example:
+Training is time-boxed to fit a single GPU session (`stylegan2.training.total_time_budget_hours`):
+it calibrates real steps/sec with a short timed run, scales the step target to the
+remaining budget, then trains in small chunks, auto-resuming per class across sessions.
 
 ```bash
-python scripts/run_generation.py \
-  --method stylegan \
-  --network_pkl /path/to/network-snapshot.pkl
+# Train (one class at a time, or --classes BCC SCC melanoma for all three)
+python scripts/run_generation.py --method stylegan_train --classes SCC
+
+# Generate from the trained checkpoints, with perceptual-hash de-duplication
+python scripts/run_generation.py --method stylegan --classes SCC
 ```
 
 The configured Skin Cancer categories are:
@@ -474,7 +483,16 @@ SCC
 melanoma
 ```
 
-Large datasets, generated images, model weights and the external StyleGAN repository are intentionally excluded from Git.
+FID (real vs. generated, per class) can be computed with
+`src/evaluation/metrics.py::compute_fid_for_classes` — see `stylegan2.evaluation.fid_dims`
+in the config for the reduced-dimension Inception block used for this small-dataset setting.
+
+An alternative NVIDIA `stylegan2-ada-pytorch`-based path (a single class-conditional or
+combined model, loaded from a `.pkl` network snapshot) is kept in `stylegan_trainer.py` /
+`stylegan_generator.py` / the `stylegan2_ada` config block for reference — it is **not**
+the implementation used to produce this repo's published Skin Cancer images.
+
+Large datasets, generated images, model weights and any external StyleGAN repository are intentionally excluded from Git.
 
 ---
 
@@ -636,7 +654,9 @@ The verification workflow checks:
 Reproducibility features include:
 
 - Fixed dataset split seed: `42`
-- Stable prompt-derived generation seeds
+- Deterministic per-class diffusion generation seeds (positional formula keyed on
+  prompt number + variation index, not prompt content -- see `configs/generation_config.yaml`
+  → `diffusion.seeding`)
 - Centralized configuration
 - Serialized `label_map.json`
 - Large-artifact exclusion through `.gitignore`
@@ -686,7 +706,9 @@ These runtime artifacts are ignored by Git.
 | Transformers | Transformer ecosystem support |
 | scikit-learn | Splitting, metrics and class weighting |
 | Pillow | Image loading and validation |
-| StyleGAN2-ADA | External repository for StyleGAN workflow |
+| stylegan2_pytorch | Skin Cancer generative workflow (lucidrains/stylegan2-pytorch, PyPI) |
+| pytorch-fid / ImageHash | Skin Cancer generation evaluation (FID) and de-duplication (perceptual hash) |
+| StyleGAN2-ADA | External repository, reference-only alternative StyleGAN workflow (not used to produce the published dataset) |
 | Realistic Vision V5.1 | External pretrained diffusion model |
 | Stable Diffusion VAE | External pretrained VAE |
 

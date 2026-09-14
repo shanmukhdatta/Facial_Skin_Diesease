@@ -7,6 +7,8 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 from PIL import Image
 
+from src.generation.prompts import build_final_prompt, CUSTOM_PROMPT_PREFIX
+
 try:
     from tqdm import tqdm
 except ImportError:
@@ -61,6 +63,23 @@ class DiffusionGenerator:
 
         self.min_pixel_std = cfg.get("quality_control", {}).get("min_pixel_std", 3.0)
 
+        # ---- per-class deterministic seed formula (Section 1 + 8 of the Kaggle notebook) ----
+        # seed = (selected_seeds[class] + (prompt_num-1)*prompt_seed_step + (v-1)*variation_seed_step) % 2**32
+        # retry seed = (that seed + retry * retry_offset) % 2**32
+        # NOTE: this is a positional formula keyed on (prompt_num, variation_index), not on the
+        # prompt's own content -- it intentionally overrides each prompt entry's own `seed_base`.
+        seeding_cfg = cfg.get("seeding", {})
+        self.selected_seeds: Dict[str, int] = seeding_cfg.get("selected_seeds", {})
+        self.prompt_seed_step = seeding_cfg.get("prompt_seed_step", 7919)
+        self.variation_seed_step = seeding_cfg.get("variation_seed_step", 104729)
+        self.retry_offset = seeding_cfg.get("retry_offset", 15485863)
+
+        # ---- output filename convention: cls{class_index:02d}_p_{prompt#:03d}_v_{i}.png ----
+        self.class_index: Dict[str, int] = cfg.get("class_index", {})
+
+        # ---- photorealistic prefix prepended to every prompt before generation ----
+        self.prompt_prefix = gcfg.get("prompt_prefix", CUSTOM_PROMPT_PREFIX)
+
         self.pipe = None
         self.hires_pipe = None
         self.torch = None
@@ -84,10 +103,14 @@ class DiffusionGenerator:
             if self.vae_id:
                 vae = AutoencoderKL.from_pretrained(self.vae_id, torch_dtype=dtype)
 
-            pipe_kwargs: Dict[str, Any] = {
-                "torch_dtype": dtype,
-                "safety_checker": None if not self.safety_checker else "default",
-            }
+            pipe_kwargs: Dict[str, Any] = {"torch_dtype": dtype}
+            if not self.safety_checker:
+                # diffusers doesn't accept safety_checker="default" -- passing that string
+                # crashes on the first generation call. Omitting the key entirely when a
+                # safety checker IS wanted lets diffusers load its own default; explicitly
+                # disable it otherwise.
+                pipe_kwargs["safety_checker"] = None
+                pipe_kwargs["requires_safety_checker"] = False
             if vae is not None:
                 pipe_kwargs["vae"] = vae
 
@@ -269,13 +292,23 @@ class DiffusionGenerator:
         generated_count = 0
         pbar = tqdm(total=total_target, desc=f"{class_name}", unit="img")
 
+        cls_idx = self.class_index.get(class_name)
+        base_seed = self.selected_seeds.get(class_name, 42)
+
         for entry in class_prompts:
             pid = entry["id"]
-            prompt_text = entry["prompt"]
-            seed_base = entry.get("seed_base", 42)
+            prompt_num = pid + 1  # repo ids are 0-indexed -> 1-indexed for filenames/seeds
+            raw_prompt = entry["prompt"]
+            final_prompt = build_final_prompt(raw_prompt, self.prompt_prefix)
 
             for img_idx in range(n_per_prompt):
-                img_name = f"{class_name}_p{pid:04d}_s{img_idx:02d}.png"
+                v = img_idx + 1
+                if cls_idx is not None:
+                    img_name = f"cls{cls_idx:02d}_p_{prompt_num:03d}_v_{v}.png"
+                else:
+                    # No class_index configured for this class -- fall back to the
+                    # original repo naming instead of guessing a number.
+                    img_name = f"{class_name}_p{pid:04d}_s{img_idx:02d}.png"
                 img_path = out_dir / img_name
 
                 if img_path.exists():
@@ -283,21 +316,39 @@ class DiffusionGenerator:
                     generated_count += 1
                     continue
 
-                seed = (seed_base + img_idx * 7919) % (2**32)
+                # Positional formula keyed on (prompt_num, variation index) -- this is the
+                # formula that actually produced the published dataset. It intentionally
+                # does NOT use entry["seed_base"] (that per-prompt content-derived seed is
+                # what the repo used before this fix; see generation_config.yaml comments).
+                base_variation_seed = (
+                    base_seed
+                    + (prompt_num - 1) * self.prompt_seed_step
+                    + (v - 1) * self.variation_seed_step
+                ) % (2**32)
+
                 success = False
-
+                last_error = None
                 for retry in range(self.max_retries):
-                    current_seed = seed + retry * 104729
-                    img = self.generate_single(prompt_text, current_seed)
-
-                    if looks_degenerate(img, self.min_pixel_std):
+                    current_seed = (base_variation_seed + retry * self.retry_offset) % (2**32)
+                    try:
+                        img = self.generate_single(final_prompt, current_seed, negative_prompt=self.negative_prompt)
+                    except Exception as e:
+                        # A single failed attempt (e.g. transient CUDA OOM) must never take
+                        # down the whole class run -- log it, count it as a used retry, move on.
+                        last_error = f"exception: {type(e).__name__}: {e}"
                         if rejected_handle:
                             rejected_handle.write(json.dumps({
-                                "class": class_name,
-                                "prompt_id": pid,
-                                "seed": current_seed,
-                                "reason": "low_std",
-                                "time": time.time(),
+                                "class": class_name, "prompt_id": pid, "seed": current_seed,
+                                "reason": last_error, "time": time.time(),
+                            }) + "\n")
+                        continue
+
+                    if looks_degenerate(img, self.min_pixel_std):
+                        last_error = "rejected: looks_degenerate (low pixel std)"
+                        if rejected_handle:
+                            rejected_handle.write(json.dumps({
+                                "class": class_name, "prompt_id": pid, "seed": current_seed,
+                                "reason": "low_std", "time": time.time(),
                             }) + "\n")
                         continue
 
@@ -307,6 +358,9 @@ class DiffusionGenerator:
                         "path": str(img_path),
                         "class": class_name,
                         "prompt_id": pid,
+                        "prompt_number": prompt_num,
+                        "variation_number": v,
+                        # phenotype/demographic detail from the repo's own prompt metadata
                         "phenotype": entry.get("phenotype"),
                         "gender": entry.get("gender"),
                         "variation_group": entry.get("variation_group"),
@@ -314,7 +368,14 @@ class DiffusionGenerator:
                         "severity": entry.get("severity"),
                         "fitzpatrick": entry.get("fitzpatrick"),
                         "distribution": entry.get("distribution"),
-                        "seed": current_seed,
+                        # actual generation parameters used for this image
+                        "selected_base_seed": base_seed,
+                        "actual_seed": current_seed,
+                        "prompt": raw_prompt,
+                        "final_prompt": final_prompt,
+                        "negative_prompt": self.negative_prompt,
+                        "inference_steps": self.num_inference_steps,
+                        "guidance_scale": self.guidance_scale,
                     }
                     meta_handle.write(json.dumps(meta_record) + "\n")
                     meta_handle.flush()

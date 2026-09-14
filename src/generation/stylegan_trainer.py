@@ -1,9 +1,21 @@
 """
 stylegan_trainer.py
 ===================
-Orchestration wrapper for StyleGAN2-ADA training (Section 3.2.2 of the paper)
-alongside a self-contained single-step GAN verification engine for rapid
-smoke testing, CI/CD, and offline reproducibility verification.
+Orchestration wrappers for Skin Cancer (BCC / SCC / melanoma) GAN training
+(Section 3.2.2 of the paper), plus a self-contained single-step GAN verification
+engine for rapid smoke testing, CI/CD, and offline reproducibility verification.
+
+Two training orchestrators live here:
+
+- `StyleGAN2PyTorchTrainer` -- wraps the `stylegan2_pytorch` PyPI package
+  (lucidrains/stylegan2-pytorch). **This is the implementation actually used to
+  generate the published Skin Cancer synthetic images**: one independent,
+  unconditional model trained per class, time-boxed to fit a Kaggle GPU session.
+- `StyleGANTrainer` -- wraps NVIDIA's official `stylegan2-ada-pytorch` training
+  script instead. Kept for reference / as an alternative path (e.g. if you want a
+  class-conditional single model later) -- it is NOT what produced the dataset
+  currently published with this repo, and `scripts/run_generation.py` does not call
+  it by default.
 """
 
 from __future__ import annotations
@@ -12,6 +24,7 @@ import argparse
 import json
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -19,10 +32,159 @@ import numpy as np
 from PIL import Image
 
 
+class StyleGAN2PyTorchTrainer:
+    """
+    Orchestration wrapper around the `stylegan2_pytorch` CLI (lucidrains/stylegan2-pytorch)
+    -- the implementation actually used to train the Skin Cancer synthetic classes
+    (Section 3.2.2). Trains one independent, unconditional model per class
+    (BCC / SCC / melanoma), each auto-resuming from its own checkpoint directory, within
+    a wall-clock time budget suited to a single Kaggle GPU session.
+
+    Expects `cfg` to be the `stylegan2` block of `configs/generation_config.yaml`.
+    """
+
+    def __init__(self, cfg: Dict[str, Any]):
+        self.cfg = cfg
+        self.paths = cfg.get("paths", {})
+        self.dataset_cfg = cfg.get("dataset", {})
+        self.training_cfg = cfg.get("training", {})
+
+    def _models_dir(self) -> Path:
+        return Path(self.paths.get("models_dir", "outputs/stylegan_training/models"))
+
+    def _results_dir(self) -> Path:
+        return Path(self.paths.get("results_dir", "outputs/stylegan_training/results"))
+
+    def has_checkpoint(self, class_name: str) -> bool:
+        """True if a resumable checkpoint already exists for this class."""
+        ckpt_dir = self._models_dir() / class_name
+        return ckpt_dir.exists() and any(ckpt_dir.glob("model_*.pt"))
+
+    def build_train_command(
+        self,
+        class_name: str,
+        data_dir: Path,
+        target_steps_this_chunk: int,
+        fresh: bool = False,
+    ) -> List[str]:
+        tcfg = self.training_cfg
+        cmd = [
+            "stylegan2_pytorch",
+            f"--data={data_dir}",
+            f"--name={class_name}",
+            f"--models_dir={self._models_dir()}",
+            f"--results_dir={self._results_dir()}",
+            f"--image-size={self.dataset_cfg.get('image_size', 256)}",
+            f"--network-capacity={tcfg.get('network_capacity', 16)}",
+            f"--batch-size={tcfg.get('batch_size', 4)}",
+            f"--gradient-accumulate-every={tcfg.get('gradient_accumulate_every', 8)}",
+            f"--num-train-steps={target_steps_this_chunk}",
+            f"--aug-prob={tcfg.get('aug_prob', 0.4)}",
+            f"--aug-types={tcfg.get('aug_types', '[translation,cutout,color]')}",
+        ]
+        attn_layers = tcfg.get("attn_layers")
+        if attn_layers and attn_layers != "[]":
+            cmd.append(f"--attn-layers={attn_layers}")
+        if fresh:
+            cmd.append("--new")
+        return cmd
+
+    def run_class_within_budget(
+        self,
+        class_name: str,
+        input_root: Union[str, Path],
+        per_class_deadline_seconds: float,
+        dry_run: bool = False,
+    ) -> None:
+        """
+        Calibrate real steps/sec with a short timed run, scale `num_train_steps` to fit
+        the remaining time budget (with a safety margin), then train in `chunk_steps`
+        increments until either the (possibly-scaled) step target or the wall-clock
+        deadline is hit -- whichever comes first. Mirrors the Kaggle notebook's
+        calibrate-then-chunk training loop exactly, so re-running this against the same
+        seed data and time budget reproduces the same training procedure (not
+        bit-identical weights, since GPU/timing varies run to run).
+        """
+        tcfg = self.training_cfg
+        chunk_steps = tcfg.get("chunk_steps", 250)
+        calibration_steps = tcfg.get("calibration_steps", 50)
+        min_viable_steps = tcfg.get("min_viable_steps", 1500)
+        safety_margin = tcfg.get("training_safety_margin", 0.80)
+        target_total = tcfg.get("num_train_steps", 50_000)
+
+        data_dir = Path(input_root) / class_name
+        log_path = self._models_dir() / class_name / "train_log.txt"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+
+        class_has_checkpoint = self.has_checkpoint(class_name)
+        start_steps = 0 if class_has_checkpoint else calibration_steps
+
+        print(f"[stylegan2_pytorch] {class_name}: "
+              f"{'resuming' if class_has_checkpoint else 'starting fresh'}")
+
+        t0 = time.time()
+        calib_cmd = self.build_train_command(
+            class_name, data_dir, calibration_steps, fresh=not class_has_checkpoint
+        )
+        print(f"[stylegan2_pytorch] {class_name}: calibrating -- {' '.join(calib_cmd)}")
+        if not dry_run:
+            self._stream_run(calib_cmd, log_path)
+        elapsed = max(time.time() - t0, 1e-6)
+        sps = calibration_steps / elapsed
+        measured_ok = elapsed >= 5.0  # a real run should take noticeably longer than this
+
+        remaining_for_class = per_class_deadline_seconds - elapsed
+        if measured_ok:
+            achievable = int(sps * remaining_for_class * safety_margin)
+            target_total = max(min_viable_steps, min(target_total, start_steps + achievable))
+            print(f"[stylegan2_pytorch] {class_name}: {sps:.3f} steps/sec, "
+                  f"{remaining_for_class/3600:.2f}h remaining -> target {target_total} steps")
+        else:
+            print(f"[stylegan2_pytorch] {class_name}: resumed checkpoint was already past "
+                  f"the calibration target -- skipping step-target scaling, relying on the "
+                  f"wall-clock cutoff below.")
+
+        steps_target_this_call = start_steps
+        class_start = time.time()
+        while steps_target_this_call < target_total:
+            if (time.time() - class_start) >= per_class_deadline_seconds:
+                print(f"[stylegan2_pytorch] {class_name}: time budget reached, stopping.")
+                break
+            steps_target_this_call = min(steps_target_this_call + chunk_steps, target_total)
+            cmd = self.build_train_command(class_name, data_dir, steps_target_this_call, fresh=False)
+            print(f"[stylegan2_pytorch] {class_name}: training toward "
+                  f"{steps_target_this_call}/{target_total} steps")
+            if not dry_run:
+                self._stream_run(cmd, log_path)
+
+        print(f"[stylegan2_pytorch] {class_name}: done for this session.")
+
+    @staticmethod
+    def _stream_run(cmd: List[str], log_path: Path) -> int:
+        """Run cmd, streaming output live and appending it to log_path."""
+        with open(log_path, "a") as log_f, subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, bufsize=1, universal_newlines=True,
+        ) as proc:
+            for line in proc.stdout:
+                sys.stdout.write(line)
+                log_f.write(line)
+            proc.wait()
+        if proc.returncode != 0:
+            raise RuntimeError(
+                f"stylegan2_pytorch training step failed with exit code {proc.returncode}. "
+                f"See {log_path} for details."
+            )
+        return proc.returncode
+
+
 class StyleGANTrainer:
     """
-    Orchestration wrapper around NVIDIA's official StyleGAN2-ADA-PyTorch training code
-    for the Skin Cancer synthetic class (Section 3.2.2).
+    Orchestration wrapper around NVIDIA's official StyleGAN2-ADA-PyTorch training code.
+
+    NOT the implementation used to produce this repo's published Skin Cancer images --
+    kept as an alternative path (e.g. for a single class-conditional model instead of
+    three independent ones). See `StyleGAN2PyTorchTrainer` above for the actual method.
     """
 
     def __init__(self, cfg: Dict[str, Any]):
