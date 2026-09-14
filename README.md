@@ -9,6 +9,7 @@
   <img src="https://img.shields.io/badge/TensorFlow-2.15%2B-FF6F00?style=for-the-badge&logo=tensorflow&logoColor=white" alt="TensorFlow">
   <img src="https://img.shields.io/badge/PyTorch-2.0%2B-EE4C2C?style=for-the-badge&logo=pytorch&logoColor=white" alt="PyTorch">
   <img src="https://img.shields.io/github/license/shanmukhdatta/Facial_Skin_Diesease?style=for-the-badge" alt="MIT License">
+  <a href="https://www.kaggle.com/datasets/shanmukhdatta/facial-skin-disease"><img src="https://img.shields.io/badge/Kaggle-Dataset-20BEFF?style=for-the-badge&logo=kaggle&logoColor=white" alt="Kaggle Dataset"></a>
 </p>
 
 </div>
@@ -214,6 +215,8 @@ pip install -r requirements.txt
 ---
 
 ## Dataset Format
+
+> **Kaggle Dataset**: [https://www.kaggle.com/datasets/shanmukhdatta/facial-skin-disease](https://www.kaggle.com/datasets/shanmukhdatta/facial-skin-disease)
 
 The classifier discovers class labels from subdirectories inside a dataset root. Two ways to point it at data are supported.
 
