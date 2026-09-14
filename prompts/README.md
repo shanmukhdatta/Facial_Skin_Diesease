@@ -1,136 +1,154 @@
 # Structured Diffusion Prompts for Facial Skin Disease Synthesis
 
-This directory contains the complete corpus of **1,500 structured diffusion prompts** used to generate 7,500 photorealistic facial skin disease images across five disease classes using **Realistic Vision V5.1** (Stable Diffusion 1.5 fine-tune). Combined with 1,500 StyleGAN2-ADA generated Skin Cancer images, this forms the **9,000-image balanced synthetic dataset** described in the paper:
+This directory contains the structured diffusion prompt corpus for the 5 prompt-generated
+disease classes, plus the metadata each prompt was built from. Prompts are consumed by
+[`scripts/run_generation.py`](../scripts/run_generation.py) via
+[`src/generation/prompts.py`](../src/generation/prompts.py), and the actual sampling
+parameters (scheduler, steps, guidance scale, seeding, negative prompt) live in
+[`configs/generation_config.yaml`](../configs/generation_config.yaml) under the
+`diffusion:` key, not in this directory.
 
-> **"Enhancing Facial Skin Disease Detection Through Synthetic Data Generation Using Diffusion Models, GANs, and Pre-Trained CNN Architectures"**
+The Skin Cancer class (BCC / SCC / melanoma) is **not** generated from these text prompts —
+it is produced by a separate per-class StyleGAN2 pipeline; see
+[`src/generation/stylegan_generator.py`](../src/generation/stylegan_generator.py) /
+[`src/generation/stylegan_trainer.py`](../src/generation/stylegan_trainer.py) and the
+`stylegan2:` block of `configs/generation_config.yaml`. That pipeline uses the
+`stylegan2_pytorch` package (lucidrains/stylegan2-pytorch) — an alternative path built on
+NVIDIA's official `stylegan2-ada-pytorch` is kept in the same files under the `stylegan2_ada`
+config key purely for reference, and is **not** what this repository's generation scripts
+run by default.
 
 ---
 
-## 🗂️ File Inventory
+## File Inventory
 
-| File | Target Class | Subtypes / Phenotypes | Genders | Prompts | Images (5 seeds/prompt) |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| [`acne_prompts.txt`](./acne_prompts.txt) | **Acne** | Comedonal, Papulopustular, Nodulocystic | Female (150), Male (150) | 300 | 1,500 |
-| [`vitiligo_prompts.txt`](./vitiligo_prompts.txt) | **Vitiligo** | Segmental, Non-segmental / Generalized, Acrofacial | Female (150), Male (150) | 300 | 1,500 |
-| [`fungal_infection_prompts.txt`](./fungal_infection_prompts.txt) | **Fungal Infection** | Tinea faciei, Tinea versicolor, Cutaneous candidiasis | Female (150), Male (150) | 300 | 1,500 |
-| [`normal_skin_prompts.txt`](./normal_skin_prompts.txt) | **Normal Skin** | Oily, Dry, Normal surface texture | Female (150), Male (150) | 300 | 1,500 |
-| [`hyperpigmentation_prompts.txt`](./hyperpigmentation_prompts.txt) | **Hyperpigmentation** | Melasma, Post-inflammatory (PIH), Dyschromia | Female (150), Male (150) | 300 | 1,500 |
-| **Total (5 Classes)** | | **15 Subtypes** | **Balanced (1:1)** | **1,500** | **7,500** |
+Each class has a plain-text prompt file (one prompt per line) and a matching `_meta.jsonl`
+file (one JSON record per line, in the same order, with the structured fields — phenotype,
+gender, variation group, age, severity, Fitzpatrick type, anatomical distribution, and
+per-image seed — that the prompt was built from). `scripts/run_generation.py` loads these
+if present, and otherwise regenerates them from `PromptBuilder` and writes them back out.
 
-*(Note: Skin Cancer is generated via StyleGAN2-ADA using 300 real seed lesion images [100 BCC, 100 SCC, 100 Melanoma] yielding 1,500 images; see [`generation/stylegan2_ada/`](../generation/stylegan2_ada/README.md).)*
+| File | Target Class | Phenotypes |
+| :--- | :--- | :--- |
+| [`acne.txt`](./acne.txt) / [`acne_prompts.txt`](./acne_prompts.txt), [`acne_meta.jsonl`](./acne_meta.jsonl) | Acne | comedonal, papulopustular, nodular |
+| [`vitiligo.txt`](./vitiligo.txt) / [`vitiligo_prompts.txt`](./vitiligo_prompts.txt), [`vitiligo_meta.jsonl`](./vitiligo_meta.jsonl) | Vitiligo | segmental, non-segmental, acrofacial |
+| [`fungal_infection.txt`](./fungal_infection.txt) / [`fungal_infection_prompts.txt`](./fungal_infection_prompts.txt), [`fungal_infection_meta.jsonl`](./fungal_infection_meta.jsonl) | Fungal Infection | tinea faciei, tinea versicolor, cutaneous candidiasis |
+| [`normal_skin.txt`](./normal_skin.txt) / [`normal_skin_prompts.txt`](./normal_skin_prompts.txt), [`normal_skin_meta.jsonl`](./normal_skin_meta.jsonl) | Normal Skin | oily, dry, normal |
+| [`hyperpigmentation.txt`](./hyperpigmentation.txt) / [`hyperpigmentation_prompts.txt`](./hyperpigmentation_prompts.txt), [`hyperpigmentation_meta.jsonl`](./hyperpigmentation_meta.jsonl) | Hyperpigmentation | melasma, dyschromia, post-inflammatory hyperpigmentation |
+
+Each class has exactly 300 prompts: 3 phenotypes × 2 genders × 5 variation groups × 10 prompts per group. `scripts/run_generation.py` generates `images_per_prompt` images per prompt (5 by default, set in `configs/generation_config.yaml` → `diffusion.generation.images_per_prompt`), for up to 1,500 images per class.
 
 ---
 
-## 🌳 Hierarchical Condition Tree
+## Hierarchical Prompt Structure
 
-Rather than using generic, unconstrained text prompts (e.g., *"a person with acne"*), prompts are systematically synthesized via a 5-level hierarchical generation condition tree:
+Rather than unconstrained free-text prompts, each prompt is built deterministically by
+`PromptBuilder` (`src/generation/prompts.py`) from a fixed hierarchy:
 
 ```
-Disease Class (e.g., Acne)
+Disease Class (e.g., acne)
 │
-├── Subtype / Phenotype (3 per class, 100 prompts each)
-│   ├── Comedonal acne
-│   ├── Papulopustular acne
-│   └── Nodular / nodulocystic acne
+├── Phenotype (3 per class, 100 prompts each)
+│   ├── comedonal
+│   ├── papulopustular
+│   └── nodular
 │
-├── Demographic Gender (Balanced 1:1, 50 prompts per gender per subtype)
-│   ├── Female (Prompts 001–050)
-│   └── Male   (Prompts 051–100)
+├── Gender (2 per phenotype, 50 prompts each)
+│   ├── female
+│   └── male
 │
-└── Variation Axes (10 prompts per group per gender)
-    ├── [01–10 AGE VARIATION]                     (Ages 15 to 48 years)
-    ├── [11–20 SEVERITY VARIATION]                (Mild, Moderate, Severe)
-    ├── [21–30 SKIN-TONE VARIATION]               (Fitzpatrick Types I to VI)
-    ├── [31–40 ANATOMICAL-DISTRIBUTION VARIATION] (Cheeks, forehead, chin, perioral, etc.)
-    └── [41–50 COMBINED ORTHOGONAL VARIATION]     (Multi-factorial combinations)
+└── Variation Group (5 per gender, 10 prompts each)
+    ├── age                     — age drawn from one of 3 configured age ranges
+    ├── severity                — mild / moderate / severe
+    ├── skin_tone               — Fitzpatrick type I–VI
+    ├── anatomical_distribution — one of the class's configured facial locations
+    └── combined                — age, severity, Fitzpatrick type and distribution
+                                    all randomized together
+```
+
+Outside its own variation axis, each group uses the configured default age range,
+severity, Fitzpatrick type, and the first configured distribution for that class — see
+`configs/generation_config.yaml` → `diffusion.variations` for the exact defaults and
+value lists. Every prompt's per-image seed is derived deterministically from
+`(class, phenotype, gender, variation_group, index)` via `stable_seed()`, so rebuilding
+a prompt file from scratch reproduces byte-identical prompts and metadata.
+
+---
+
+## Phenotype Descriptors
+
+Each phenotype's descriptive text (used verbatim inside the generated prompts) is defined
+in `PHENOTYPES` in `src/generation/prompts.py`:
+
+### Acne
+- **Comedonal:** blackheads, whiteheads, clogged pores, small non-inflamed bumps, minimal redness.
+- **Papulopustular:** red papules, inflamed bumps, pustules with white pus-filled centers, surrounding redness.
+- **Nodular:** large deep nodules, firm swollen lumps, intense inflammation, pronounced redness, deep lesions.
+
+### Vitiligo
+- **Segmental:** unilateral, sharply localized depigmented patch with an irregular border.
+- **Non-segmental:** multiple symmetric depigmented patches with well-demarcated borders.
+- **Acrofacial:** depigmented patches around the eyes, mouth, and nose with irregular margins.
+
+### Fungal Infection
+- **Tinea faciei:** annular, scaly, erythematous plaque with a raised, well-defined border and mild central clearing.
+- **Tinea versicolor:** multiple small hypo/hyperpigmented scaly patches with fine surface scaling.
+- **Cutaneous candidiasis:** moist erythematous patches with satellite pustules in a skin-fold area.
+
+### Normal Skin
+- **Oily:** shiny skin with visible sebum, slightly enlarged pores, smooth even complexion.
+- **Dry:** matte texture with fine flaking, subtle roughness, even healthy complexion.
+- **Normal:** balanced, healthy, even-toned skin, minimal pore visibility, no visible lesions.
+
+### Hyperpigmentation
+- **Melasma:** symmetric brown-to-gray patches on the cheeks, forehead, and upper lip.
+- **Dyschromia:** diffuse, mottled areas of uneven skin tone.
+- **Post-inflammatory hyperpigmentation:** localized dark brown-black macules at sites of previous inflammation.
+
+See `DISTRIBUTIONS` in the same file for each class's set of anatomical-location phrases used by the `anatomical_distribution` and `combined` variation groups.
+
+---
+
+## Final Prompt Assembly
+
+The text stored in this directory is the *repo-generated* prompt. Before a prompt is
+actually sent to the diffusion model, `build_final_prompt()`
+(`src/generation/prompts.py`) prepends a fixed photorealism prefix and strips the
+repo's own generic trailing clause (starting at `"Natural facial anatomy"`) so it isn't
+duplicated — see that function's docstring for the exact matching rule. The prefix
+currently configured in `configs/generation_config.yaml` is:
+
+```text
+Photorealistic clinical dermatology photograph, real human face, natural realistic
+skin texture, visible pores, true-to-life skin color, unretouched skin, single face,
+neutral expression, sharp photographic detail.
 ```
 
 ---
 
-## 🔬 Subtypes and Phenotypic Descriptors
-
-Each prompt explicitly specifies pathognomonic clinical features, lesion morphology, and negative diagnostic exclusions:
-
-### 1. Acne (`acne_prompts.txt`)
-- **Comedonal Acne:** Open and closed comedones (blackheads and whiteheads), visibly clogged follicular orifices, non-inflamed papules, absence of dominant nodules or cysts.
-- **Papulopustular Acne:** Inflammatory erythematous papules, superficial pustules containing purulent exudate, surrounding perilesional erythema.
-- **Nodular / Nodulocystic Acne:** Deep-seated inflammatory nodules, cystic lesions, pronounced edema, induration, and tissue involvement.
-
-### 2. Vitiligo (`vitiligo_prompts.txt`)
-- **Segmental Vitiligo:** Unilateral depigmented macules/patches strictly respecting the midline, dermatomal distribution, trichrome borders.
-- **Non-segmental (Generalized) Vitiligo:** Bilateral, symmetric chalk-white macules, progressive borders, follicular repigmentation islands.
-- **Acrofacial Vitiligo:** Distal extremity and periorificial facial predilection (perioral, periocular, nasal tip).
-
-### 3. Fungal Infection (`fungal_infection_prompts.txt`)
-- **Tinea Faciei:** Annular erythematous plaques with central clearing, active scaly advancing borders, vesicular margins.
-- **Tinea Versicolor (Pityriasis Versicolor):** Confluent hypo- or hyperpigmented macules with delicate branny scale (collarette).
-- **Cutaneous Candidiasis:** Beefy red erythematous patches, macerated skin folds, characteristic satellite pustules and papules.
-
-### 4. Normal Skin (`normal_skin_prompts.txt`)
-- **Oily Skin Phenotype:** Visible follicular sebum, cutaneous shine, mildly dilated pores, greasy reflection, absence of pathological eruptions.
-- **Dry Skin Phenotype:** Fine epidermal xerosis, subtle scaling, matte surface, absence of erythema or excoriation.
-- **Normal Surface Phenotype:** Balanced epidermal hydration, smooth stratum corneum, uniform texture, physiological pores.
-
-### 5. Hyperpigmentation (`hyperpigmentation_prompts.txt`)
-- **Melasma:** Reticulated, symmetrical light-to-dark brown macules/patches in centrofacial, malar, or mandibular patterns.
-- **Post-Inflammatory Hyperpigmentation (PIH):** Irregular hyperpigmented macules localized to sites of resolved inflammatory lesions.
-- **Dyschromia:** Mottled, patchy variations in cutaneous pigmentary uniformity with sun-exposed facial distribution.
-
----
-
-## 🎨 Controlled Variation Axes
-
-Across every subtype and gender block, 5 orthogonal axes ensure extensive intra-class diversity:
-
-| Variation Group | Prompt Range | Parameterized Variables | Clinical Rationale |
-| :--- | :--- | :--- | :--- |
-| **Age Variation** | `01–10` | Exact ages: 15, 16, 17, 18, 19, 20, 21, 22, 23, 24 (female) / 25–48 (male) | Alters epidermal thickness, elasticity, sebum production, and wrinkle baselines. |
-| **Severity Variation** | `11–20` | `Mild` (11–13), `Moderate` (14–16, 20), `Severe` (17–19) | Prevents classifiers from overfitting solely to extreme lesion presentations. |
-| **Skin-Tone Variation** | `21–30` | **Fitzpatrick Types I to VI** (Fair, Pale, Medium, Olive, Brown, Dark brown/black) | Eliminates demographic bias across diverse patient phototypes. |
-| **Anatomical Distribution** | `31–40` | Cheeks, forehead, chin, temples, nasal region, jawline, perioral, multifocal | Trains spatial invariance across different facial anatomical landmarks. |
-| **Combined Variation** | `41–50` | Orthogonal cross-product of age, Fitzpatrick type, severity, and distribution | Stresses generalizability across intersectional demographic/pathological factors. |
-
----
-
-## ⚙️ Generative Pipeline & Execution
-
-Prompts are parsed and executed using [`generation/diffusion/generate_diffusion.py`](../generation/diffusion/generate_diffusion.py):
+## Generation Command
 
 ```bash
-# Example: Generate 1,500 images for Acne (300 prompts × 5 seeds)
-python generation/diffusion/generate_diffusion.py \
-    --config generation/diffusion/config.yaml \
-    --classes acne \
-    --output-dir data/synthetic/acne \
-    --images-per-prompt 5
+# Verify/rebuild prompt manifests only, without touching a GPU or loading the model
+python scripts/run_generation.py --method prompts_only
+
+# Generate the full configured set for one or more classes
+python scripts/run_generation.py --method diffusion --classes acne vitiligo
+
+# Small test batch
+python scripts/run_generation.py --method diffusion --classes acne --limit_prompts 5 --images_per_prompt 2
 ```
 
-Sampling parameters (`guidance_scale`, `num_inference_steps`, `seed_base`,
-scheduler, etc.) are not CLI flags — set them in
-[`generation/diffusion/config.yaml`](../generation/diffusion/config.yaml)
-instead. Use `--dry-run` to inspect/rebuild the prompt files without
-touching the GPU or loading the diffusion model.
+Sampling parameters (scheduler, inference steps, guidance scale, seeding formula,
+negative prompt) are not CLI flags — they're set in `configs/generation_config.yaml`
+under `diffusion.model` / `diffusion.generation` / `diffusion.seeding`. As configured
+there:
 
-### Recommended Diffusion Hyperparameters
-- **Base Model:** Realistic Vision V5.1 (SD 1.5 fine-tune)
-- **Sampler:** DPM++ 2M Karras
-- **Steps:** 30
-- **Guidance Scale (CFG):** 7.0
-- **Resolution:** 512 × 512 (resized to 224 × 224 for CNN training)
-- **Negative Prompt:**
-  ```text
-  deformed, bad anatomy, bad eyes, disfigured, poorly drawn face, mutation, mutated,
-  extra limb, poorly drawn hands, missing limb, blurry, floating limbs, disconnected limbs,
-  malformed hands, blur, out of focus, long neck, surreal, cartoon, 3d render, anime,
-  plastic skin, mannequin, airbrushed, smooth filter, watermark, signature
-  ```
+- **Base model:** `SG161222/Realistic_Vision_V5.1_noVAE`, with the `stabilityai/sd-vae-ft-mse` VAE
+- **Scheduler:** DPM-Solver++ with Karras sigmas
+- **Steps:** 40
+- **Guidance scale:** 7.5
+- **Resolution:** 512 × 512 (resized to 224 × 224 for classifier training)
+- **Negative prompt:** see `diffusion.generation.negative_prompt` in `configs/generation_config.yaml`
 
----
-
-## 🩺 Quality Validation (Human-in-the-Loop)
-
-As detailed in Section 3.2.3 of the paper, all generated images are screened before training inclusion:
-1. **Clinical Plausibility:** Verifying that lesion morphology matches the target disease and subtype description.
-2. **Anatomical Coherence:** Eliminating structural facial artifacts, double eyes, distorted noses, or uncanny skin blurring.
-3. **Artifact-Free Boundaries:** Checking that the transition between affected lesion and unaffected skin is natural and gradual.
-4. **Degenerate Sample Rejection:** Automatic filtering based on edge density and variance thresholds in `generate_diffusion.py`.
+Generated images below a minimum pixel-standard-deviation threshold (`diffusion.quality_control.min_pixel_std`) are treated as degenerate/blank and automatically retried with a different seed, up to `diffusion.generation.max_retries_per_image` attempts; rejections are logged to `diffusion.paths.rejected_log`.

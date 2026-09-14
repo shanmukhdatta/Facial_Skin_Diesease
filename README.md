@@ -22,7 +22,7 @@
 This project combines two complementary research workflows:
 
 1. **Synthetic data generation** — controlled generation of facial skin-condition images using structured prompts and diffusion models, with a separate per-class StyleGAN2 (`stylegan2_pytorch`) path for Skin Cancer.
-2. **Deep image classification** — preprocessing, quality control, leakage-aware splitting, training-set balancing, transfer learning, progressive fine-tuning, comprehensive evaluation, ensemble prediction, and standalone inference.
+2. **Deep image classification** — preprocessing, quality control, leakage-aware splitting, training-set balancing, transfer learning, progressive fine-tuning, comprehensive evaluation, ensemble prediction, and standalone inference. Classification supports either a single dataset, or a combined synthetic + real dataset mixed at a configurable ratio.
 
 The codebase is organized as reusable Python modules under `src/`, configuration under `configs/`, CLI entry points under `scripts/`, prompt manifests under `prompts/`, and experimental notebooks under `Note books/`.
 
@@ -34,7 +34,8 @@ The codebase is organized as reusable Python modules under `src/`, configuration
 |---|---|
 | Data ingestion | Recursive discovery of JPG, JPEG, PNG, BMP, TIFF and WebP images |
 | Data validation | Full image decoding and invalid/corrupt-image filtering |
-| Dataset splitting | Stratified 70/15/15 train/validation/test split |
+| Dataset splitting | Stratified 70/15/15 train/validation/test split (single-source), or group-aware split + per-class stratified split (combined synthetic + real) |
+| Combined training | Optional mixing of synthetic and real images into the training split at a configurable per-class ratio, with validation/test always drawn from the full union of both sources |
 | Class balancing | Training-only bounded oversampling/capping |
 | Input pipeline | TensorFlow `tf.data`, batching, shuffling and prefetching |
 | Augmentation | Flip, rotation, zoom, contrast, brightness and translation |
@@ -53,7 +54,7 @@ The codebase is organized as reusable Python modules under `src/`, configuration
 ## Pipeline Architecture
 
 ```text
-Raw Dataset
+Raw Dataset(s)
     │
     ▼
 Discover Images
@@ -61,8 +62,19 @@ Discover Images
     ▼
 Validate / Clean
     │
-    ▼
-Stratified 70 / 15 / 15 Split
+    ├── Single-source mode ───────────► Stratified 70/15/15 Split
+    │
+    └── Combined mode (synthetic + real)
+            │
+            ├── Synthetic: group-aware split
+            │   (prompt-group split for the 5 disease classes,
+            │    per-subtype split for BCC/SCC/MEL)
+            │
+            └── Real: per-class stratified split
+                    │
+                    ▼
+          Mix TRAIN splits per class at `real_fraction`
+          (val/test = full union of both sources, never mixed)
     │
     ├──────────────► Validation / Test (untouched)
     │
@@ -203,9 +215,11 @@ pip install -r requirements.txt
 
 ## Dataset Format
 
-The classifier discovers class labels from subdirectories inside `data_dir`.
+The classifier discovers class labels from subdirectories inside a dataset root. Two ways to point it at data are supported.
 
-Recommended structure:
+### Single-source mode
+
+Used when only `--data_dir` (or `DATA_DIR`) is provided. All splitting, balancing, and training draws from this one directory.
 
 ```text
 data/
@@ -217,6 +231,30 @@ data/
     ├── Skin_Cancer/
     └── Vitiligo/
 ```
+
+### Combined synthetic + real mode
+
+Used when `--real_fraction` is set together with `--synthetic_data_dir` and `--real_data_dir` (or their `SYNTHETIC_DATA_DIR` / `REAL_DATA_DIR` environment variable equivalents). Both roots must expose **the exact same set of class subfolders**.
+
+```text
+data/
+├── Face_Dataset/          # synthetic images (SYNTHETIC_DATA_DIR)
+│   ├── Acne/
+│   ├── Fungal_Infection/
+│   ├── Hyperpigmentation/
+│   ├── Normal_Skin/
+│   ├── Skin_Cancer/        # filenames matched to BCC/SCC/MEL subtype by pattern
+│   └── Vitiligo/
+└── Real_Dataset/           # real images (REAL_DATA_DIR)
+    ├── Acne/
+    ├── Fungal_Infection/
+    ├── Hyperpigmentation/
+    ├── Normal_Skin/
+    ├── Skin_Cancer/
+    └── Vitiligo/
+```
+
+Within `Skin_Cancer/`, filenames are matched against a `_BCC_###` / `_SCC_###` / `_MEL_###` suffix pattern to recover the subtype for a per-subtype split; the 5 other classes rely on a `_p_###_v_#` prompt/variant suffix so that every image generated from the same prompt lands in a single split (no prompt-level leakage). Files matching neither pattern are excluded from the combined-mode split and reported.
 
 Supported image formats:
 
@@ -238,10 +276,11 @@ The pipeline:
 1. Discovers valid image files.
 2. Fully decodes images using Pillow.
 3. Removes corrupt, unreadable or undersized images.
-4. Performs a stratified split.
-5. Balances **only the training split**.
-6. Builds TensorFlow datasets.
-7. Applies augmentation only during training.
+4. Performs a split (stratified for single-source; group-aware + stratified for combined mode — see above).
+5. In combined mode, mixes the two sources' TRAIN splits per class at `real_fraction`; validation and test are always the full, unmixed union of both sources' held-out partitions.
+6. Balances **only the final training split**.
+7. Builds TensorFlow datasets.
+8. Applies augmentation only during training.
 
 ---
 
@@ -257,6 +296,7 @@ Main classifier settings are centralized in `configs/config.py`.
 | Test-size parameter | `0.30` |
 | Effective split | `70 / 15 / 15` |
 | Seed | `42` |
+| Real-image fraction (combined mode) | `0.50` |
 | Phase 1 epochs | `15` |
 | Phase 2 epochs | `25` |
 | Phase 3 epochs | `30` |
@@ -267,6 +307,8 @@ Main classifier settings are centralized in `configs/config.py`.
 | L2 | `1e-4` |
 | Focal gamma | `2.0` |
 | Focal alpha | `0.25` |
+
+Paths (`data_dir`, `synthetic_data_dir`, `real_data_dir`, `save_dir`, `plot_dir`) default to a Kaggle input/working layout when `/kaggle/input` exists, and fall back to local `data/` / `outputs/` folders otherwise. Any of them can be overridden with the matching environment variable (`DATA_DIR`, `SYNTHETIC_DATA_DIR`, `REAL_DATA_DIR`, `SAVE_DIR`, `PLOT_DIR`) or CLI flag.
 
 Generation settings are stored in `configs/generation_config.yaml`.
 
@@ -280,7 +322,7 @@ The primary training entry point is:
 python scripts/run_training.py
 ```
 
-### Train one model
+### Train one model (single-source)
 
 ```bash
 python scripts/run_training.py \
@@ -288,6 +330,19 @@ python scripts/run_training.py \
   --model ResNet50 \
   --batch_size 32
 ```
+
+### Train one model (combined synthetic + real)
+
+```bash
+python scripts/run_training.py \
+  --synthetic_data_dir data/Face_Dataset \
+  --real_data_dir data/Real_Dataset \
+  --real_fraction 0.5 \
+  --model ResNet50 \
+  --batch_size 32
+```
+
+`--real_fraction` sets the target share of each class's final training pool drawn from real images (the remainder from synthetic); the largest total achievable under both the requested ratio and each source's per-class availability is used, with no duplication. Validation and test splits are unaffected by this ratio — they always use every held-out image from both sources.
 
 ### Train all supported models
 
@@ -344,6 +399,10 @@ Learning rate: 2e-5
 Weight decay: 1e-5
 Epochs: 30
 ```
+
+Every phase runs a cosine learning-rate schedule (with linear warmup) alongside `ReduceLROnPlateau` and `EarlyStopping` on validation accuracy, and checkpoints the best-scoring epoch per phase.
+
+> **Note:** The cosine schedule re-sets the learning rate at the start of every epoch to the value dictated by its own formula, which will override whatever `ReduceLROnPlateau` reduced it to at the end of the previous epoch. In the current configuration, `ReduceLROnPlateau` therefore has no lasting effect on the optimizer's learning rate — the cosine schedule alone determines it. This does not break training, but it means the two callbacks are not currently working together as their names would suggest.
 
 ---
 
@@ -507,6 +566,8 @@ python scripts/run_evaluation.py \
   --plot_dir outputs/plots
 ```
 
+`run_evaluation.py` re-derives its validation/test split from `--data_dir` using the single-source stratified split before scoring saved checkpoints and building the ensemble. If models were trained in **combined synthetic + real mode**, this script does not currently reconstruct that combined split — point it at a dataset and splitting logic matching how the checkpoints were trained, or extend it to call the same combined-mode split functions used in `run_training.py`, before treating its numbers as reproducing the original training run's held-out evaluation.
+
 ## Metrics
 
 The evaluation subsystem computes:
@@ -588,6 +649,14 @@ python scripts/run_inference.py \
   --model_path all
 ```
 
+### Demo mode
+
+```bash
+python scripts/run_inference.py --demo
+```
+
+`--demo` (or omitting `--image_path`) selects a sample from the held-out test split, reconstructed via the same single-source `--data_dir` split used in `run_evaluation.py`. As with evaluation, this reconstruction does not currently follow the combined synthetic + real split path.
+
 ---
 
 # Notebooks
@@ -657,9 +726,15 @@ Reproducibility features include:
 - Deterministic per-class diffusion generation seeds (positional formula keyed on
   prompt number + variation index, not prompt content -- see `configs/generation_config.yaml`
   → `diffusion.seeding`)
+- Deterministic, prompt-group-aware splitting for synthetic data to prevent
+  prompt-level leakage across train/validation/test
 - Centralized configuration
 - Serialized `label_map.json`
 - Large-artifact exclusion through `.gitignore`
+
+### Known limitation
+
+`run_evaluation.py` and the demo mode of `run_inference.py` currently only reconstruct the **single-source** split (`split_dataset` over `--data_dir`). If a model was trained via the **combined synthetic + real** path (`--real_fraction`, `--synthetic_data_dir`, `--real_data_dir` in `run_training.py`), these two scripts do not yet rebuild the matching combined validation/test split, so their reconstructed splits will not line up with the ones actually used during that training run. Passing matching combined-mode arguments through to these scripts (mirroring the branch already in `run_training.py`) closes this gap.
 
 ---
 
@@ -724,15 +799,14 @@ Performance depends on the quality, labeling, demographic diversity, acquisition
 
 This repository has not established clinical validity, regulatory compliance, treatment efficacy, or diagnostic safety.
 
----
+### Evaluation/inference split reconstruction
 
+As noted under Reproducibility above, `run_evaluation.py` and the `--demo` mode of `run_inference.py` do not yet mirror the combined synthetic + real split used by `run_training.py`; this should be addressed before relying on their output for models trained in combined mode.
+
+---
 
 # License
 
 Released under the **MIT License**.
 
 See [`LICENSE`](LICENSE) for details.
-
----
-
-
