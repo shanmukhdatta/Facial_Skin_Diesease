@@ -43,10 +43,14 @@ class ProjectConfig:
             )
         )
     )
-    # Fraction of each class's FINAL combined TRAIN split drawn from real images
-    # (the rest drawn from synthetic). Val/Test always use 100% of both sources'
-    # val/test partitions, never fractioned. Set real_fraction=None to skip the
-    # combined pipeline and fall back to the legacy single-source split_dataset().
+    # Two INDEPENDENT mixing knobs for the combined TRAIN split: per class,
+    # synth_fraction of that class's own synthetic train pool and real_fraction
+    # of that class's own real train pool are taken and unioned (no shared
+    # ratio constraint between the two). Val/Test always use 100% of both
+    # sources' val/test partitions, never fractioned. Set real_fraction=None to
+    # skip the combined pipeline and fall back to the legacy single-source
+    # split_dataset().
+    synth_fraction: float = 0.50
     real_fraction: float = 0.50
     save_dir: Path = field(
         default_factory=lambda: Path(

@@ -26,10 +26,14 @@ def parse_args():
                          help="Path to synthetic dataset root (combined mode).")
     parser.add_argument("--real_data_dir", type=str, default=None,
                          help="Path to real dataset root (combined mode).")
+    parser.add_argument("--synth_fraction", type=float, default=None,
+                         help="Fraction of each class's own SYNTHETIC train pool to keep "
+                              "(0-1), applied independently of --real_fraction.")
     parser.add_argument("--real_fraction", type=float, default=None,
-                         help="Fraction of each class's TRAIN split drawn from real images "
-                              "(0-1). Set to enable combined synthetic+real training. "
-                              "If omitted, legacy single-source split_dataset() is used.")
+                         help="Fraction of each class's own REAL train pool to keep (0-1), "
+                              "applied independently of --synth_fraction. Set either fraction "
+                              "to enable combined synthetic+real training. If omitted, legacy "
+                              "single-source split_dataset() is used.")
     parser.add_argument(
         "--model",
         type=str,
@@ -54,7 +58,7 @@ def main():
             discover_dataset,
             clean_dataset,
             split_dataset,
-            split_real_stratified,
+            split_real_grouped,
             split_synthetic_grouped,
             mix_train_pools,
             balance_dataset,
@@ -88,6 +92,8 @@ def main():
         config.synthetic_data_dir = Path(args.synthetic_data_dir)
     if args.real_data_dir:
         config.real_data_dir = Path(args.real_data_dir)
+    if args.synth_fraction is not None:
+        config.synth_fraction = args.synth_fraction
     if args.real_fraction is not None:
         config.real_fraction = args.real_fraction
     if args.save_dir:
@@ -129,14 +135,20 @@ def main():
         train_df_synth, val_df_synth, test_df_synth = split_synthetic_grouped(
             df_clean_synth, test_size=config.test_size, seed=config.seed
         )
-        # 3b. Real: plain per-class STRATIFIED split.
-        train_df_real, val_df_real, test_df_real = split_real_stratified(
+        # 3b. Real: perceptual-hash near-duplicate GROUP split (GroupShuffleSplit).
+        #     Replaces the old plain per-class stratified split, which let
+        #     near-identical real images leak across the train/test boundary.
+        train_df_real, val_df_real, test_df_real = split_real_grouped(
             df_clean_real, test_size=config.test_size, seed=config.seed
         )
-        # 3c. Mix TRAIN only, per class, by real_fraction. Val/Test are the
-        #     full union of both sources' val/test (never fractioned).
+        # 3c. Mix TRAIN only, per class, using two INDEPENDENT fraction knobs
+        #     (synth_fraction of the synthetic pool, real_fraction of the real
+        #     pool — no shared ratio between them). Val/Test are the full
+        #     union of both sources' val/test (never fractioned).
         train_df_raw = mix_train_pools(
-            train_df_synth, train_df_real, real_fraction=config.real_fraction, seed=config.seed
+            train_df_synth, train_df_real,
+            synth_fraction=config.synth_fraction, real_fraction=config.real_fraction,
+            seed=config.seed,
         )
         val_df = pd.concat([val_df_synth, val_df_real], ignore_index=True)
         test_df = pd.concat([test_df_synth, test_df_real], ignore_index=True)

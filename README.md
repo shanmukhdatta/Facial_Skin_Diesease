@@ -35,8 +35,8 @@ The codebase is organized as reusable Python modules under `src/`, configuration
 |---|---|
 | Data ingestion | Recursive discovery of JPG, JPEG, PNG, BMP, TIFF and WebP images |
 | Data validation | Full image decoding and invalid/corrupt-image filtering |
-| Dataset splitting | Stratified 70/15/15 train/validation/test split (single-source), or group-aware split + per-class stratified split (combined synthetic + real) |
-| Combined training | Optional mixing of synthetic and real images into the training split at a configurable per-class ratio, with validation/test always drawn from the full union of both sources |
+| Dataset splitting | Stratified 70/15/15 train/validation/test split (single-source), or group-aware split for both sources (combined synthetic + real): prompt-group split for synthetic, perceptual-hash near-duplicate group split for real |
+| Combined training | Optional mixing of synthetic and real images into the training split via two independent per-class fractions (`synth_fraction`, `real_fraction`), with validation/test always drawn from the full union of both sources |
 | Class balancing | Training-only bounded oversampling/capping |
 | Input pipeline | TensorFlow `tf.data`, batching, shuffling and prefetching |
 | Augmentation | Flip, rotation, zoom, contrast, brightness and translation |
@@ -71,10 +71,14 @@ Validate / Clean
             │   (prompt-group split for the 5 disease classes,
             │    per-subtype split for BCC/SCC/MEL)
             │
-            └── Real: per-class stratified split
+            └── Real: perceptual-hash near-duplicate group split
+                (GroupShuffleSplit over phash clusters — catches
+                 exact/near-duplicate images a stratified split misses)
                     │
                     ▼
-          Mix TRAIN splits per class at `real_fraction`
+          Mix TRAIN splits per class using two INDEPENDENT fractions:
+          `synth_fraction` of the synthetic pool, `real_fraction` of
+          the real pool (no shared ratio between them)
           (val/test = full union of both sources, never mixed)
     │
     ├──────────────► Validation / Test (untouched)
@@ -279,8 +283,8 @@ The pipeline:
 1. Discovers valid image files.
 2. Fully decodes images using Pillow.
 3. Removes corrupt, unreadable or undersized images.
-4. Performs a split (stratified for single-source; group-aware + stratified for combined mode — see above).
-5. In combined mode, mixes the two sources' TRAIN splits per class at `real_fraction`; validation and test are always the full, unmixed union of both sources' held-out partitions.
+4. Performs a split (stratified for single-source; group-aware for both sources in combined mode — see above).
+5. In combined mode, mixes the two sources' TRAIN splits per class using two independent fractions, `synth_fraction` and `real_fraction`; validation and test are always the full, unmixed union of both sources' held-out partitions.
 6. Balances **only the final training split**.
 7. Builds TensorFlow datasets.
 8. Applies augmentation only during training.
@@ -299,7 +303,8 @@ Main classifier settings are centralized in `configs/config.py`.
 | Test-size parameter | `0.30` |
 | Effective split | `70 / 15 / 15` |
 | Seed | `42` |
-| Real-image fraction (combined mode) | `0.50` |
+| Synthetic-pool fraction (combined mode) | `0.50` |
+| Real-pool fraction (combined mode) | `0.50` |
 | Phase 1 epochs | `15` |
 | Phase 2 epochs | `25` |
 | Phase 3 epochs | `30` |
@@ -340,12 +345,13 @@ python scripts/run_training.py \
 python scripts/run_training.py \
   --synthetic_data_dir data/Face_Dataset \
   --real_data_dir data/Real_Dataset \
+  --synth_fraction 0.5 \
   --real_fraction 0.5 \
   --model ResNet50 \
   --batch_size 32
 ```
 
-`--real_fraction` sets the target share of each class's final training pool drawn from real images (the remainder from synthetic); the largest total achievable under both the requested ratio and each source's per-class availability is used, with no duplication. Validation and test splits are unaffected by this ratio — they always use every held-out image from both sources.
+`--synth_fraction` and `--real_fraction` are two **independent** knobs: per class, `synth_fraction` of that class's own synthetic train pool and `real_fraction` of that class's own real train pool are kept and unioned — there is no shared ratio between them, so e.g. `0.5`/`0.5` simply keeps half of each pool regardless of how large one pool is relative to the other. Validation and test splits are unaffected by either fraction — they always use every held-out image from both sources.
 
 ### Train all supported models
 
