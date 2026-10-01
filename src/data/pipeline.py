@@ -24,26 +24,30 @@ def build_augmentation_layer() -> keras.Sequential:
     ], name="augmentation")
 
 
-def _pil_load(path_bytes: bytes, img_size: int = 224) -> np.ndarray:
+def _pil_load(path_bytes: bytes, raw_bytes: bytes, img_size: int = 224) -> np.ndarray:
     """
     Load any image format (JPEG/PNG/BMP/TIFF/WebP) with PIL and return a float32 RGB array in [0, 255].
     Backbone-specific normalizations happen inside the model itself.
+    Raises RuntimeError with the offending file path if corrupted or unreadable.
     """
     try:
-        with PILImage.open(io.BytesIO(path_bytes)) as img:
+        with PILImage.open(io.BytesIO(raw_bytes)) as img:
             img = img.convert("RGB")
             img = img.resize((img_size, img_size), PILImage.BILINEAR)
             return np.array(img, dtype=np.float32)
-    except Exception:
-        return np.zeros((img_size, img_size, 3), dtype=np.float32)
+    except Exception as e:
+        file_path = path_bytes.decode("utf-8", errors="replace") if isinstance(path_bytes, bytes) else str(path_bytes)
+        raise RuntimeError(
+            f"[ERROR] Corrupted or unreadable image encountered during preprocessing: '{file_path}' ({e})"
+        ) from e
 
 
 def preprocess_image(path, label, augment: bool, img_size: int, augmentation_layer=None):
     """Bridge PIL loader into the TensorFlow execution graph."""
     raw = tf.io.read_file(path)
     image = tf.py_function(
-        func=lambda r: _pil_load(r.numpy(), img_size),
-        inp=[raw],
+        func=lambda p, r: _pil_load(p.numpy(), r.numpy(), img_size),
+        inp=[path, raw],
         Tout=tf.float32,
     )
     image.set_shape([img_size, img_size, 3])
@@ -54,6 +58,7 @@ def preprocess_image(path, label, augment: bool, img_size: int, augmentation_lay
     image = tf.clip_by_value(image, 0.0, 255.0)
     label = tf.cast(label, tf.int32)
     return image, label
+
 
 
 def make_dataset(

@@ -12,6 +12,12 @@ from configs.config import ProjectConfig
 def parse_args():
     parser = argparse.ArgumentParser(description="Evaluate Saved Models and Run Weighted Ensemble.")
     parser.add_argument("--data_dir", type=str, default=None, help="Path to dataset directory.")
+    parser.add_argument("--synthetic_data_dir", type=str, default=None, help="Synthetic dataset root (combined mode).")
+    parser.add_argument("--real_data_dir", type=str, default=None, help="Real dataset root (combined mode).")
+    parser.add_argument("--mode", type=str, default=None, choices=["combined", "synthetic", "real"],
+                        help="Data source used in training (must match run_training.py).")
+    parser.add_argument("--single_source", action="store_true", help="Legacy single-source split on --data_dir.")
+    parser.add_argument("--split_csv", type=str, default=None, help="Saved splits_v2.csv for the real data.")
     parser.add_argument("--save_dir", type=str, default=None, help="Directory with saved .keras models.")
     parser.add_argument("--plot_dir", type=str, default=None, help="Directory to save evaluation plots.")
     parser.add_argument("--label_map", type=str, default=None, help="Path to label_map.json.")
@@ -22,7 +28,7 @@ def main():
     args = parse_args()
     try:
         import pandas as pd
-        from src.data.dataset import discover_dataset, clean_dataset, split_dataset
+        from src.data.splits import build_splits
         from src.data.pipeline import make_dataset
         from src.data.utils import load_label_map
         from src.evaluation.ensemble import WeightedEnsemble
@@ -41,6 +47,18 @@ def main():
 
     if args.data_dir:
         config.data_dir = Path(args.data_dir)
+    if args.synthetic_data_dir:
+        config.synthetic_data_dir = Path(args.synthetic_data_dir)
+    if args.real_data_dir:
+        config.real_data_dir = Path(args.real_data_dir)
+    if args.mode:
+        config.mode = args.mode
+    if args.single_source:
+        config.real_fraction = None
+    if args.split_csv:
+        config.split_csv_override = args.split_csv
+    # Evaluation only needs the val/test sets; the report-only audit is skipped (training already ran it).
+    config.run_cross_source_audit = False
     if args.save_dir:
         config.save_dir = Path(args.save_dir)
     if args.plot_dir:
@@ -58,9 +76,8 @@ def main():
     print("======================================================================")
 
     # Re-create val/test splits (val is needed for ensemble weighting, test for final scoring)
-    df_full, _ = discover_dataset(config.data_dir)
-    df_clean = clean_dataset(df_full)
-    _, val_df, test_df = split_dataset(df_clean, test_size=config.test_size, seed=config.seed)
+    # Uses the SAME split builder as training (reuses the saved real split CSV in save_dir).
+    _, val_df, test_df, _ = build_splits(config)
 
     val_ds = make_dataset(
         paths=val_df["path"].values,
@@ -94,7 +111,7 @@ def main():
 
     ens_results = ensemble.evaluate_ensemble(val_ds, test_ds)
     if ens_results:
-        metrics_dict, _, _ = ens_results
+        metrics_dict, y_true_ens, y_pred_ens = ens_results
         comp_csv = config.save_dir / "model_comparison.csv"
         if comp_csv.exists():
             df_compare = pd.read_csv(comp_csv)
@@ -111,6 +128,19 @@ def main():
         plot_comparison_dashboard(df_final, config.plot_dir)
         plot_radar_chart(df_final, config.plot_dir)
         print(f"\n[OK] Saved final comparison table to {out_csv}")
+
+        # Section 21c: Per-source evaluation (real-only vs synthetic-only test metrics)
+        if config.mode == "combined" and "source" in test_df.columns:
+            from src.evaluation.metrics import evaluate_per_source
+            systems = {}
+            for m, name in zip(ensemble.models, ensemble.model_names):
+                y_m_preds = []
+                for images, _ in test_ds:
+                    y_m_preds.extend(m.predict(images, verbose=0))
+                systems[name] = (y_true_ens, np.argmax(np.array(y_m_preds), axis=1))
+            systems["Ensemble (Weighted)"] = (y_true_ens, y_pred_ens)
+            evaluate_per_source(systems, test_df, class_names, save_dir=config.save_dir)
+
 
 
 if __name__ == "__main__":

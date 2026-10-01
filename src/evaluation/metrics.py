@@ -117,3 +117,85 @@ def compute_fid_for_classes(
             print(f"[fid] '{class_name}': computation failed ({e}) -- skipping.")
 
     return fid_scores
+
+
+def evaluate_per_source(
+    systems: Dict[str, Tuple[np.ndarray, np.ndarray]],
+    test_df: Any,
+    class_names: List[str],
+    save_dir: Any = None,
+) -> Tuple[Any, Any]:
+    """
+    Per-source evaluation (notebook Section 21c): separates test set metrics into
+    real-only and synthetic-only subsets. The real-only metrics reflect performance
+    on clinical real-world images.
+
+    Args:
+        systems: {model_name: (y_true, y_pred)}
+        test_df: test partition dataframe (must contain 'source' column or match order)
+        class_names: list of string class names
+        save_dir: optional directory to save per_source_overall.csv & per_source_recall.csv
+
+    Returns:
+        (per_source_df, per_source_recall_df)
+    """
+    import pandas as pd
+    from sklearn.metrics import accuracy_score, f1_score, recall_score
+
+    if "source" in test_df.columns:
+        is_syn = (test_df["source"] == "synthetic").values
+    else:
+        # Fallback if source column not present
+        print("[WARN] 'source' column not in test_df; cannot separate real vs synthetic.")
+        return pd.DataFrame(), pd.DataFrame()
+
+    labels = list(range(len(class_names)))
+    rows, rec = [], []
+    for name, (yt, yp) in systems.items():
+        yt = np.asarray(yt)
+        yp = np.asarray(yp)
+        for sname, msk in (("real", ~is_syn), ("synthetic", is_syn)):
+            if msk.sum() == 0:
+                continue
+            acc = round(float(accuracy_score(yt[msk], yp[msk])), 4)
+            f1m = round(float(f1_score(yt[msk], yp[msk], average="macro", labels=labels, zero_division=0)), 4)
+            rows.append({
+                "Model": name,
+                "Test subset": sname,
+                "n": int(msk.sum()),
+                "Accuracy": acc,
+                "F1 (macro)": f1m,
+            })
+            r = recall_score(yt[msk], yp[msk], average=None, labels=labels, zero_division=0)
+            for ci, c in enumerate(class_names):
+                rec.append({
+                    "Model": name,
+                    "subset": sname,
+                    "class": c,
+                    "recall": round(float(r[ci]), 3),
+                })
+
+    per_source = pd.DataFrame(rows)
+    per_source_recall = pd.DataFrame(rec)
+
+    print("\n" + "=" * 70)
+    print("PER-SOURCE TEST METRICS (combined test = synthetic part + real part):")
+    print("=" * 70)
+    if not per_source.empty:
+        print(per_source.to_string(index=False))
+        for sname in ("real", "synthetic"):
+            sub = per_source_recall[per_source_recall["subset"] == sname]
+            if not sub.empty:
+                print(f"\nPer-class recall -- {sname.upper()} test images only:")
+                print(sub.pivot(index="class", columns="Model", values="recall").to_string())
+
+        if save_dir:
+            save_dir = Path(save_dir)
+            save_dir.mkdir(parents=True, exist_ok=True)
+            per_source.to_csv(save_dir / "per_source_overall.csv", index=False)
+            per_source_recall.to_csv(save_dir / "per_source_recall.csv", index=False)
+            print(f"\n[OK] Per-source metrics saved to {save_dir}")
+
+    print("\nNote: The REAL-only rows reflect true generalization on real-world clinical images.")
+    return per_source, per_source_recall
+

@@ -21,6 +21,9 @@ def parse_args():
     )
     parser.add_argument("--label_map", type=str, default=None, help="Path to label_map.json file.")
     parser.add_argument("--save_plot", type=str, default=None, help="Filepath to save visualization plot.")
+    parser.add_argument("--mode", type=str, default=None, choices=["combined", "synthetic", "real"],
+                        help="Data source used in training (must match run_training.py).")
+    parser.add_argument("--single_source", action="store_true", help="Legacy single-source split on config.data_dir.")
     parser.add_argument("--demo", action="store_true", help="Run automated inference demo on held-out test data.")
     return parser.parse_args()
 
@@ -28,6 +31,10 @@ def parse_args():
 def main():
     args = parse_args()
     config = ProjectConfig()
+    if args.mode:
+        config.mode = args.mode
+    if args.single_source:
+        config.real_fraction = None
 
     # Determine label map
     label_map_path = Path(args.label_map) if args.label_map else config.save_dir / "label_map.json"
@@ -40,12 +47,12 @@ def main():
     image_path = args.image_path
     true_label = None
     if args.demo or image_path is None:
-        if config.data_dir.exists():
+        from src.data.splits import required_dirs
+        if all(d.exists() for d in required_dirs(config)):
             print("[INFO] Selecting held-out test sample for inference demo...")
-            from src.data.dataset import discover_dataset, clean_dataset, split_dataset
-            df_full, class_names = discover_dataset(config.data_dir)
-            df_clean = clean_dataset(df_full)
-            _, _, test_df = split_dataset(df_clean, test_size=config.test_size, seed=config.seed)
+            from src.data.splits import build_splits
+            config.run_cross_source_audit = False
+            _, _, test_df, _ = build_splits(config)
             sample_row = test_df.iloc[0]
             image_path = sample_row["path"]
             true_label = sample_row["class"]

@@ -57,6 +57,7 @@ class WeightedEnsemble:
             return None
 
         # --- Step 1: compute performance-based weights on the VALIDATION set ---
+        # Ensemble weights are derived exclusively from validation Macro F1 scores (notebook Section 20).
         y_val = []
         val_probs_list = [[] for _ in self.models]
 
@@ -68,10 +69,23 @@ class WeightedEnsemble:
         y_val = np.array(y_val)
         val_probs_arrays = [np.array(p) for p in val_probs_list]
 
-        accuracies = [(np.argmax(p, axis=1) == y_val).mean() for p in val_probs_arrays]
-        weights = np.array(accuracies)
-        weights = weights / weights.sum()
-        print(f"\nEnsemble weights (from val set): {dict(zip(self.model_names, weights.round(3)))}")
+        validation_macro_f1 = np.array([
+            f1_score(y_val, np.argmax(p, axis=1), average="macro", zero_division=0)
+            for p in val_probs_arrays
+        ])
+
+        weight_sum = validation_macro_f1.sum()
+        if weight_sum <= 0:
+            # Edge case: fallback to equal weighting
+            weights = np.full(len(self.models), 1.0 / len(self.models))
+        else:
+            weights = validation_macro_f1 / weight_sum
+
+        print("\nValidation Macro F1:")
+        for name, f1v in zip(self.model_names, validation_macro_f1):
+            print(f"  {name:<20}: {f1v:.4f}")
+
+        print(f"\nEnsemble weights: {dict(zip(self.model_names, weights.round(4)))}")
 
         # --- Step 2: score the weighted ensemble on the held-out TEST set ---
         y_true = []
@@ -89,8 +103,11 @@ class WeightedEnsemble:
         y_pred = np.argmax(ensemble_probs, axis=1)
 
         ens_acc = (y_pred == y_true).mean()
-        ens_f1 = f1_score(y_true, y_pred, average="macro", zero_division=0)
+        ens_f1_mac = f1_score(y_true, y_pred, average="macro", zero_division=0)
+        ens_f1_wt = f1_score(y_true, y_pred, average="weighted", zero_division=0)
         ens_kappa = cohen_kappa_score(y_true, y_pred)
+        from sklearn.metrics import matthews_corrcoef
+        ens_mcc = matthews_corrcoef(y_true, y_pred)
 
         y_bin = label_binarize(y_true, classes=np.arange(self.num_classes))
         try:
@@ -100,21 +117,26 @@ class WeightedEnsemble:
 
         print(f"\n[INFO] ENSEMBLE Results:")
         print(f"  Accuracy      : {ens_acc:.4f}")
-        print(f"  F1 (Macro)    : {ens_f1:.4f}")
+        print(f"  F1 (Macro)    : {ens_f1_mac:.4f}")
+        print(f"  F1 (Weighted) : {ens_f1_wt:.4f}")
         print(f"  AUC-ROC       : {ens_auc:.4f}")
         print(f"  Cohen's Kappa : {ens_kappa:.4f}")
+        print(f"  MCC           : {ens_mcc:.4f}")
+        report_dict = classification_report(y_true, y_pred, target_names=self.class_names, zero_division=0, output_dict=True)
         print("\n" + classification_report(y_true, y_pred, target_names=self.class_names, zero_division=0))
 
         plot_confusion_matrix(y_true, y_pred, self.class_names, "Ensemble", self.plot_dir)
         plot_roc_curves(y_true, ensemble_probs, self.class_names, "Ensemble", self.plot_dir)
+        from src.evaluation.visualization import plot_per_class_metrics
+        plot_per_class_metrics(report_dict, self.class_names, "Ensemble", self.plot_dir)
 
         results = {
             "Model": "Ensemble (Weighted)",
             "Accuracy": round(float(ens_acc), 4),
-            "F1 (Macro)": round(float(ens_f1), 4),
-            "F1 (Weighted)": float("nan"),
+            "F1 (Macro)": round(float(ens_f1_mac), 4),
+            "F1 (Weighted)": round(float(ens_f1_wt), 4),
             "AUC-ROC": round(float(ens_auc), 4),
             "Cohen's Kappa": round(float(ens_kappa), 4),
-            "MCC": float("nan"),
+            "MCC": round(float(ens_mcc), 4),
         }
-        return results, y_true, y_pred
+        return results, y_true, y_pred

@@ -28,12 +28,21 @@ def parse_args():
                          help="Path to real dataset root (combined mode).")
     parser.add_argument("--synth_fraction", type=float, default=None,
                          help="Fraction of each class's own SYNTHETIC train pool to keep "
-                              "(0-1), applied independently of --real_fraction.")
+                              "(0-1, default 1.0 = use all, as in the notebook).")
     parser.add_argument("--real_fraction", type=float, default=None,
-                         help="Fraction of each class's own REAL train pool to keep (0-1), "
-                              "applied independently of --synth_fraction. Set either fraction "
-                              "to enable combined synthetic+real training. If omitted, legacy "
-                              "single-source split_dataset() is used.")
+                         help="Fraction of each class's own REAL train pool to keep "
+                              "(0-1, default 1.0 = use all, as in the notebook).")
+    parser.add_argument("--mode", type=str, default=None, choices=["combined", "synthetic", "real"],
+                         help="Data source: combined (synthetic+real, default), synthetic only, or real only.")
+    parser.add_argument("--single_source", action="store_true",
+                         help="Skip the combined synthetic+real pipeline and use the legacy "
+                              "single-source stratified split on --data_dir.")
+    parser.add_argument("--split_csv", type=str, default=None,
+                         help="Path to a saved splits_v2.csv (path, split, group) for the real data.")
+    parser.add_argument("--skip_cross_source_audit", action="store_true",
+                         help="Skip the report-only real<->synthetic near-duplicate audit (6d-2).")
+    parser.add_argument("--rebalance_train", action="store_true",
+                         help="Use bounded resampling (balance_dataset) instead of all train images.")
     parser.add_argument(
         "--model",
         type=str,
@@ -54,15 +63,8 @@ def main():
     args = parse_args()
     try:
         import pandas as pd
-        from src.data.dataset import (
-            discover_dataset,
-            clean_dataset,
-            split_dataset,
-            split_real_grouped,
-            split_synthetic_grouped,
-            mix_train_pools,
-            balance_dataset,
-        )
+        from src.data.dataset import balance_dataset
+        from src.data.splits import build_splits
         from src.data.pipeline import make_dataset
         from src.data.utils import compute_class_weights, save_label_map
         from src.models.backbones import get_backbone
@@ -96,6 +98,16 @@ def main():
         config.synth_fraction = args.synth_fraction
     if args.real_fraction is not None:
         config.real_fraction = args.real_fraction
+    if args.mode:
+        config.mode = args.mode
+    if args.single_source:
+        config.real_fraction = None
+    if args.split_csv:
+        config.split_csv_override = args.split_csv
+    if args.skip_cross_source_audit:
+        config.run_cross_source_audit = False
+    if args.rebalance_train:
+        config.use_all_train_images = False
     if args.save_dir:
         config.save_dir = Path(args.save_dir)
     if args.plot_dir:
@@ -108,67 +120,28 @@ def main():
 
     print("======================================================================")
     print("[INFO] Starting Face Skin Disease Classification Training Pipeline")
+    print(f"Data mode: {'single-source (legacy)' if config.real_fraction is None else config.mode}")
     print(f"Data Dir: {config.data_dir}")
     print(f"Save Dir: {config.save_dir}")
     print(f"Plot Dir: {config.plot_dir}")
     print("======================================================================")
 
-    use_combined_pipeline = config.real_fraction is not None and config.synthetic_data_dir and config.real_data_dir
+    # 1-6d. Discover -> clean -> synthetic prompt-group split + real flip-aware group split
+    #        -> combine -> MD5 / cross-source leakage audit (identical to the notebook).
+    #        Legacy single-source mode is handled inside build_splits().
+    train_df_raw, val_df, test_df, class_names = build_splits(config)
+    config.num_classes = len(class_names)
 
-    if use_combined_pipeline:
-        # ── Combined synthetic + real pipeline ──────────────────────────────
-        # 1. Discover both dataset roots (must expose the identical class set).
-        df_full_synth, class_names = discover_dataset(config.synthetic_data_dir)
-        df_full_real, class_names_real = discover_dataset(config.real_data_dir)
-        assert class_names == class_names_real, (
-            f"[ERROR] Class name mismatch between datasets!\n"
-            f"  Synthetic : {class_names}\n  Real      : {class_names_real}"
-        )
-        config.num_classes = len(class_names)
-
-        # 2. Clean corrupt files, independently per source.
-        df_clean_synth = clean_dataset(df_full_synth)
-        df_clean_real = clean_dataset(df_full_real)
-
-        # 3a. Synthetic: prompt-ID GROUP split for the 5 prompt classes, PLAIN
-        #     per-subtype split (no stratify) for Skin Cancer BCC/SCC/MEL.
-        train_df_synth, val_df_synth, test_df_synth = split_synthetic_grouped(
-            df_clean_synth, test_size=config.test_size, seed=config.seed
-        )
-        # 3b. Real: perceptual-hash near-duplicate GROUP split (GroupShuffleSplit).
-        #     Replaces the old plain per-class stratified split, which let
-        #     near-identical real images leak across the train/test boundary.
-        train_df_real, val_df_real, test_df_real = split_real_grouped(
-            df_clean_real, test_size=config.test_size, seed=config.seed
-        )
-        # 3c. Mix TRAIN only, per class, using two INDEPENDENT fraction knobs
-        #     (synth_fraction of the synthetic pool, real_fraction of the real
-        #     pool — no shared ratio between them). Val/Test are the full
-        #     union of both sources' val/test (never fractioned).
-        train_df_raw = mix_train_pools(
-            train_df_synth, train_df_real,
-            synth_fraction=config.synth_fraction, real_fraction=config.real_fraction,
-            seed=config.seed,
-        )
-        val_df = pd.concat([val_df_synth, val_df_real], ignore_index=True)
-        test_df = pd.concat([test_df_synth, test_df_real], ignore_index=True)
+    # 7. Training set: use every combined train image (default) or bounded resampling
+    if config.use_all_train_images:
+        # 100% of both sources' train partitions: nothing dropped, nothing duplicated.
+        # Imbalance is handled by the class-weighted loss.
+        df_balanced = train_df_raw.sample(frac=1, random_state=config.seed).reset_index(drop=True)
     else:
-        # ── Legacy single-source pipeline (unchanged) ───────────────────────
-        # 1. Discover & Validate Dataset
-        df_full, class_names = discover_dataset(config.data_dir)
-        config.num_classes = len(class_names)
-
-        # 2. Clean Corrupt Files
-        df_clean = clean_dataset(df_full)
-
-        # 3. Stratified Split (No Leakage)
-        train_df_raw, val_df, test_df = split_dataset(df_clean, test_size=config.test_size, seed=config.seed)
-
-    # 4. Balance Train Split Only (Post-Split)
-    train_target = int(round(train_df_raw["class"].value_counts().mean()))
-    df_balanced = balance_dataset(
-        train_df_raw, target=train_target, max_cap=train_target, seed=config.seed
-    )
+        train_target = int(round(train_df_raw["class"].value_counts().mean()))
+        df_balanced = balance_dataset(
+            train_df_raw, target=train_target, max_cap=train_target, seed=config.seed
+        )
     plot_class_distribution(train_df_raw, df_balanced, config.plot_dir)
 
     # 5. Label Map & Class Weights
@@ -271,10 +244,17 @@ def main():
         plot_comparison_dashboard(df_compare, config.plot_dir)
         plot_radar_chart(df_compare, config.plot_dir)
 
+        # Section 21c: Per-source evaluation (real-only vs synthetic-only test metrics)
+        if config.mode == "combined" and "source" in test_df.columns:
+            from src.evaluation.metrics import evaluate_per_source
+            systems = {m["model"]: (m["y_true"], m["y_pred"]) for m in all_metrics}
+            evaluate_per_source(systems, test_df, class_names, save_dir=config.save_dir)
+
         best = max(all_metrics, key=lambda x: x["accuracy"])
         print("\n" + "=" * 75)
         print("  FINAL RECOMMENDATION")
         print("=" * 75)
+
         print(f"Top Model        : {best['model']}")
         print(f"   Accuracy      : {best['accuracy']:.4f}")
         print(f"   F1 (Macro)    : {best['f1_macro']:.4f}")
