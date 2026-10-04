@@ -13,10 +13,7 @@ it is produced by a separate per-class StyleGAN2 pipeline; see
 [`src/generation/stylegan_generator.py`](../src/generation/stylegan_generator.py) /
 [`src/generation/stylegan_trainer.py`](../src/generation/stylegan_trainer.py) and the
 `stylegan2:` block of `configs/generation_config.yaml`. That pipeline uses the
-`stylegan2_pytorch` package (lucidrains/stylegan2-pytorch) — an alternative path built on
-NVIDIA's official `stylegan2-ada-pytorch` is kept in the same files under the `stylegan2_ada`
-config key purely for reference, and is **not** what this repository's generation scripts
-run by default.
+`stylegan2_pytorch` package (lucidrains/stylegan2-pytorch).
 
 ---
 

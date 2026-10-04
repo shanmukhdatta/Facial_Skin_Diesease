@@ -7,8 +7,7 @@
 #   - Total: 9,000 synthetic images
 #
 # See `diffusion:` below for the actual seeding/prompt/negative-prompt values used to
-# generate the published dataset, and `stylegan2:` (NOT `stylegan2_ada`, kept only for
-# reference) for the actual Skin Cancer training/generation method.
+# generate the published dataset, and `stylegan2:` for the Skin Cancer training/generation method.
 # =============================================================================
 
 diffusion:
@@ -125,15 +124,11 @@ diffusion:
 # -----------------------------------------------------------------------------------
 # stylegan2 -- Skin Cancer synthetic class (BCC / SCC / melanoma), Section 3.2.2
 #
-# This is the `stylegan2_pytorch` PyPI package (lucidrains/stylegan2-pytorch), NOT
-# NVIDIA's official stylegan2-ada-pytorch -- that's a different library with a different
-# CLI and no relation to the config below. Trains ONE INDEPENDENT, UNCONDITIONAL MODEL
-# PER CLASS (not a single combined/conditional model), each within a Kaggle-GPU-session
-# time budget. See src/generation/stylegan_trainer.py::StyleGAN2PyTorchTrainer and
+# Uses the `stylegan2_pytorch` PyPI package (lucidrains/stylegan2-pytorch).
+# Trains ONE INDEPENDENT, UNCONDITIONAL MODEL PER CLASS (not a single combined/
+# conditional model), each within a Kaggle-GPU-session time budget.
+# See src/generation/stylegan_trainer.py::StyleGAN2PyTorchTrainer and
 # src/generation/stylegan_generator.py::StyleGAN2PyTorchGenerator.
-#
-# (An alternative NVIDIA-ADA-based path is kept for reference under the `stylegan2_ada`
-# key further down -- it was NOT used to produce the published dataset.)
 # -----------------------------------------------------------------------------------
 stylegan2:
   paths:
@@ -179,55 +174,3 @@ stylegan2:
                     # pytorch-fid's own README for this recommendation on small datasets).
                     # Read this as a relative signal across your own classes/checkpoints,
                     # not an absolute score comparable to papers trained on thousands of images.
-
-# -----------------------------------------------------------------------------------
-# stylegan2_ada -- kept for reference only. NOT the implementation used to produce this
-# repo's published Skin Cancer images (see `stylegan2` above). Describes an alternative
-# single class-conditional-or-combined model trained via NVIDIA's official
-# stylegan2-ada-pytorch, loaded from a .pkl network snapshot.
-# -----------------------------------------------------------------------------------
-stylegan2_ada:
-  paths:
-    stylegan2_ada_repo: "./stylegan2-ada-pytorch"
-    seed_images_dir: "data/skin_cancer_seed"
-    dataset_zip: "data/skin_cancer_512.zip"
-    training_output_dir: "outputs/stylegan_training"
-    network_pkl: ""
-    generated_dir: "outputs/synthetic_dataset/skin_cancer"
-
-  dataset:
-    resolution: 512
-    classes:
-      BCC: 100
-      SCC: 100
-      melanoma: 100
-    mirror: true
-
-  training:
-    gpus: 1
-    batch: 16
-    gamma: 10.0
-    kimg: 3000
-    snap: 10
-    aug: "ada"
-    target: 0.6
-    augpipe: "bgc"
-    metrics: "fid50k_full"
-    seed: 42
-    cfg: "auto"
-    resume_pkl: "https://nvlabs-fi-cdn.nvidia.com/stylegan2-ada-pytorch/pretrained/transfer-learning-source-nets/ffhq-res256-mirror-paper256-noaug.pkl"
-
-  generation:
-    num_images: 1500
-    truncation_psi: 0.7
-    noise_mode: "const"
-    batch_size: 8
-    seed_base: 1000
-    class_split:
-      BCC: 500
-      SCC: 500
-      melanoma: 500
-
-  quality_control:
-    min_pixel_std: 3.0
-    reject_blank_images: true

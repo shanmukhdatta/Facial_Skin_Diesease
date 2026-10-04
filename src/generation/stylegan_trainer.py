@@ -5,17 +5,14 @@ Orchestration wrappers for Skin Cancer (BCC / SCC / melanoma) GAN training
 (Section 3.2.2 of the paper), plus a self-contained single-step GAN verification
 engine for rapid smoke testing, CI/CD, and offline reproducibility verification.
 
-Two training orchestrators live here:
+Orchestration wrapper for Skin Cancer (BCC / SCC / melanoma) StyleGAN2 training
+(Section 3.2.2 of the paper), plus a self-contained single-step GAN verification
+engine for rapid smoke testing, CI/CD, and offline reproducibility verification.
 
-- `StyleGAN2PyTorchTrainer` -- wraps the `stylegan2_pytorch` PyPI package
-  (lucidrains/stylegan2-pytorch). **This is the implementation actually used to
-  generate the published Skin Cancer synthetic images**: one independent,
+- `StyleGAN2PyTorchTrainer` (alias `StyleGAN2Trainer`) -- wraps the `stylegan2_pytorch` PyPI package
+  (lucidrains/stylegan2-pytorch). This is the implementation used to
+  generate the published Skin Cancer synthetic images: one independent,
   unconditional model trained per class, time-boxed to fit a Kaggle GPU session.
-- `StyleGANTrainer` -- wraps NVIDIA's official `stylegan2-ada-pytorch` training
-  script instead. Kept for reference / as an alternative path (e.g. if you want a
-  class-conditional single model later) -- it is NOT what produced the dataset
-  currently published with this repo, and `scripts/run_generation.py` does not call
-  it by default.
 """
 
 from __future__ import annotations
@@ -178,116 +175,8 @@ class StyleGAN2PyTorchTrainer:
         return proc.returncode
 
 
-class StyleGANTrainer:
-    """
-    Orchestration wrapper around NVIDIA's official StyleGAN2-ADA-PyTorch training code.
-
-    NOT the implementation used to produce this repo's published Skin Cancer images --
-    kept as an alternative path (e.g. for a single class-conditional model instead of
-    three independent ones). See `StyleGAN2PyTorchTrainer` above for the actual method.
-    """
-
-    def __init__(self, cfg: Dict[str, Any]):
-        self.cfg = cfg
-        self.paths = cfg.get("paths", {})
-        self.training_cfg = cfg.get("training", {})
-        self.dataset_cfg = cfg.get("dataset", {})
-
-    def check_repo(self, repo_dir: Path) -> bool:
-        train_py = repo_dir / "train.py"
-        dataset_tool = repo_dir / "dataset_tool.py"
-        return train_py.exists() and dataset_tool.exists()
-
-    def prepare_dataset(self, repo_dir: Path, force: bool = False) -> Path:
-        dataset_zip = Path(self.paths.get("dataset_zip", "data/skin_cancer_seed.zip"))
-        seed_dir = Path(self.paths.get("seed_images_dir", "data/skin_cancer_seed"))
-        resolution = self.dataset_cfg.get("resolution", 512)
-
-        if dataset_zip.exists() and not force:
-            print(f"[stylegan2] Dataset already prepared at {dataset_zip} (skipping conversion).")
-            return dataset_zip
-
-        if not seed_dir.exists():
-            raise FileNotFoundError(
-                f"[stylegan2] Seed image directory '{seed_dir}' not found. "
-                "Expected class subfolders (e.g. BCC, SCC, melanoma)."
-            )
-
-        dataset_zip.parent.mkdir(parents=True, exist_ok=True)
-        cmd = [
-            sys.executable,
-            str(repo_dir / "dataset_tool.py"),
-            f"--source={seed_dir}",
-            f"--dest={dataset_zip}",
-            f"--width={resolution}",
-            f"--height={resolution}",
-        ]
-        print(f"[stylegan2] Preparing dataset: {' '.join(cmd)}")
-        subprocess.run(cmd, check=True)
-        return dataset_zip
-
-    def build_train_command(
-        self,
-        repo_dir: Path,
-        dataset_zip: Path,
-        conditional: bool = False,
-        resume: Optional[str] = None,
-    ) -> List[str]:
-        tcfg = self.training_cfg
-        outdir = Path(self.paths.get("training_output_dir", "training-runs/stylegan2_skin_cancer"))
-        outdir.mkdir(parents=True, exist_ok=True)
-
-        cmd = [
-            sys.executable,
-            str(repo_dir / "train.py"),
-            f"--outdir={outdir}",
-            f"--data={dataset_zip}",
-            f"--gpus={tcfg.get('gpus', 1)}",
-            f"--batch={tcfg.get('batch', 16)}",
-            f"--gamma={tcfg.get('gamma', 10.0)}",
-            f"--kimg={tcfg.get('kimg', 2400)}",
-            f"--snap={tcfg.get('snap', 50)}",
-            f"--aug={tcfg.get('aug', 'ada')}",
-            f"--target={tcfg.get('target', 0.6)}",
-            f"--augpipe={tcfg.get('augpipe', 'bgc')}",
-            f"--metrics={tcfg.get('metrics', 'fid50k_full')}",
-            f"--seed={tcfg.get('seed', 42)}",
-            f"--cfg={tcfg.get('cfg', 'auto')}",
-            f"--mirror={1 if self.dataset_cfg.get('mirror', True) else 0}",
-        ]
-        if conditional:
-            cmd.append("--cond=1")
-
-        resume_pkl = resume or tcfg.get("resume_pkl")
-        if resume_pkl:
-            cmd.append(f"--resume={resume_pkl}")
-
-        return cmd
-
-    def run_training(
-        self,
-        conditional: bool = False,
-        resume: Optional[str] = None,
-        force_dataset: bool = False,
-        dry_run: bool = False,
-    ) -> List[str]:
-        repo_dir = Path(self.paths.get("stylegan2_ada_repo", "stylegan2-ada-pytorch"))
-        if not dry_run and not self.check_repo(repo_dir):
-            raise RuntimeError(
-                f"[stylegan2] Official repo not found at '{repo_dir}'. "
-                "Clone it: git clone https://github.com/NVlabs/stylegan2-ada-pytorch.git"
-            )
-
-        if dry_run:
-            dataset_zip = Path(self.paths.get("dataset_zip", "data/skin_cancer_seed.zip"))
-        else:
-            dataset_zip = self.prepare_dataset(repo_dir, force=force_dataset)
-
-        cmd = self.build_train_command(repo_dir, dataset_zip, conditional=conditional, resume=resume)
-        print(f"[stylegan2] Launch command: {' '.join(cmd)}")
-        if not dry_run:
-            subprocess.run(cmd, check=True)
-        return cmd
+# Canonical alias for the active StyleGAN2 trainer
+StyleGAN2Trainer = StyleGAN2PyTorchTrainer
 
 
 def sigmoid(x: np.ndarray) -> np.ndarray:

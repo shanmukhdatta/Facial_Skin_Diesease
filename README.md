@@ -565,12 +565,7 @@ FID (real vs. generated, per class) can be computed with
 `src/evaluation/metrics.py::compute_fid_for_classes` — see `stylegan2.evaluation.fid_dims`
 in the config for the reduced-dimension Inception block used for this small-dataset setting.
 
-An alternative NVIDIA `stylegan2-ada-pytorch`-based path (a single class-conditional or
-combined model, loaded from a `.pkl` network snapshot) is kept in `stylegan_trainer.py` /
-`stylegan_generator.py` / the `stylegan2_ada` config block for reference — it is **not**
-the implementation used to produce this repo's published Skin Cancer images.
-
-Large datasets, generated images, model weights and any external StyleGAN repository are intentionally excluded from Git.
+Large datasets, generated images, and model weights are intentionally excluded from Git.
 
 ---
 
@@ -803,7 +798,6 @@ These runtime artifacts are ignored by Git.
 | Pillow | Image loading and validation |
 | stylegan2_pytorch | Skin Cancer generative workflow (lucidrains/stylegan2-pytorch, PyPI) |
 | pytorch-fid / ImageHash | Skin Cancer generation evaluation (FID) and de-duplication (perceptual hash) |
-| StyleGAN2-ADA | External repository, reference-only alternative StyleGAN workflow (not used to produce the published dataset) |
 | Realistic Vision V5.1 | External pretrained diffusion model |
 | Stable Diffusion VAE | External pretrained VAE |
 
