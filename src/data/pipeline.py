@@ -1,7 +1,7 @@
 from __future__ import annotations
 import io
 import numpy as np
-from PIL import Image as PILImage
+from PIL import Image as PILImage, ImageOps
 try:
     import tensorflow as tf
     from tensorflow import keras
@@ -33,8 +33,14 @@ def _pil_load(path_bytes: bytes, raw_bytes: bytes, img_size: int = 224) -> np.nd
     try:
         with PILImage.open(io.BytesIO(raw_bytes)) as img:
             img = img.convert("RGB")
-            img = img.resize((img_size, img_size), PILImage.BILINEAR)
-            return np.array(img, dtype=np.float32)
+            # Resize without stretching facial geometry; reflect-pad the shorter axis.
+            contained = ImageOps.contain(img, (img_size, img_size), method=PILImage.Resampling.BILINEAR)
+            arr = np.asarray(contained, dtype=np.uint8)
+            h, w = arr.shape[:2]
+            top, left = (img_size - h) // 2, (img_size - w) // 2
+            pad = ((top, img_size - h - top), (left, img_size - w - left), (0, 0))
+            arr = np.pad(arr, pad, mode="reflect" if min(h, w) > 1 else "edge")
+            return arr.astype(np.float32)
     except Exception as e:
         file_path = path_bytes.decode("utf-8", errors="replace") if isinstance(path_bytes, bytes) else str(path_bytes)
         raise RuntimeError(

@@ -15,9 +15,7 @@ class ProjectConfig:
             os.getenv(
                 "DATA_DIR",
                 # Default Kaggle path or local fallback
-                "/kaggle/input/datasets/shanmukhadattaboda/real-dataset-of-face-disease/Real_data"
-                if Path("/kaggle/input").exists()
-                else str(Path(__file__).resolve().parent.parent / "data" / "Real_data"),
+                str(Path(__file__).resolve().parent.parent / "data" / "Real_data"),
             )
         )
     )
@@ -27,9 +25,7 @@ class ProjectConfig:
         default_factory=lambda: Path(
             os.getenv(
                 "SYNTHETIC_DATA_DIR",
-                "/kaggle/input/datasets/shanmukhadattaboda/facial-skin-diesease-dataset/Face_Dataset"
-                if Path("/kaggle/input").exists()
-                else str(Path(__file__).resolve().parent.parent / "data" / "Face_Dataset"),
+                str(Path(__file__).resolve().parent.parent / "data" / "Face_Dataset"),
             )
         )
     )
@@ -38,9 +34,7 @@ class ProjectConfig:
         default_factory=lambda: Path(
             os.getenv(
                 "REAL_DATA_DIR",
-                "/kaggle/input/datasets/shanmukhadattaboda/real-skin-diesease-images/Real_Dataset"
-                if Path("/kaggle/input").exists()
-                else str(Path(__file__).resolve().parent.parent / "data" / "Real_Dataset"),
+                str(Path(__file__).resolve().parent.parent / "data" / "Real_Dataset"),
             )
         )
     )
@@ -69,7 +63,8 @@ class ProjectConfig:
     embed_tau_max: float = 0.98
     max_group_share: float = 0.02        # no group may hold > 2% of all real images
     group_split_tries: int = 200         # best-of-N seeded GroupShuffleSplit
-    split_csv_override: Optional[str] = None  # e.g. path to a saved splits_v2.csv
+    split_csv_override: Optional[str] = None  # explicit real split manifest path; never auto-discover stale splits
+    synthetic_split_csv_override: Optional[str] = None  # explicit synthetic split manifest path
 
     # Final leakage audit (notebook Section 6d)
     strict_md5_assert: bool = True

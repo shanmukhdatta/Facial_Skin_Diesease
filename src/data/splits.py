@@ -79,7 +79,10 @@ def build_splits(config) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, List
     # Clean corrupt files, independently per source; then each source's own group split.
     if mode in ("combined", "synthetic"):
         df_clean_synth = clean_dataset(df_full_synth)
-        s_tr, s_va, s_te = split_synthetic_grouped(df_clean_synth, test_size=config.test_size, seed=config.seed)
+        s_tr, s_va, s_te = split_synthetic_grouped(
+            df_clean_synth, test_size=config.test_size, seed=config.seed,
+            split_csv_override=config.synthetic_split_csv_override, save_dir=config.save_dir,
+        )
         s_tr = s_tr.assign(source="synthetic")
         s_va = s_va.assign(source="synthetic")
         s_te = s_te.assign(source="synthetic")
@@ -97,26 +100,36 @@ def build_splits(config) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, List
     s_tr, s_va, s_te = synth_splits if synth_splits else (empty, empty, empty)
     r_tr, r_va, r_te = real_splits if real_splits else (empty, empty, empty)
 
-    # Train = fractions of whichever sources are active; val/test = full union of active sources.
+    # Audit the FULL partitions ONCE, before selecting any training fractions.
+    full_train = pd.concat([s_tr, r_tr], ignore_index=True)
+    full_val = pd.concat([s_va, r_va], ignore_index=True)
+    full_test = pd.concat([s_te, r_te], ignore_index=True)
+    full_train, val_df, test_df = audit_and_resolve_md5(
+        full_train, full_val, full_test, save_dir=config.save_dir,
+        strict=config.strict_md5_assert, auto_resolve=config.auto_resolve_md5_dupes,
+    )
+    s_tr = full_train[full_train["source"] == "synthetic"].reset_index(drop=True)
+    r_tr = full_train[full_train["source"] == "real"].reset_index(drop=True)
     train_df_raw = mix_train_pools(
         s_tr, r_tr,
         synth_fraction=config.synth_fraction if synth_splits else 1.0,
         real_fraction=config.real_fraction if real_splits else 1.0,
         seed=config.seed,
     )
-    val_df = pd.concat([s_va, r_va], ignore_index=True)
-    test_df = pd.concat([s_te, r_te], ignore_index=True)
+    # This manifest is calculated on the audited full pool and never on sampled train subsets.
+    out = pd.concat([full_train.assign(split="train"), val_df.assign(split="val"),
+                     test_df.assign(split="test")], ignore_index=True)
+    config.save_dir.mkdir(parents=True, exist_ok=True)
+    out[["path", "class", "source", "split"]].to_csv(config.save_dir / "full_pool_audited_splits.csv", index=False)
     print(f"  Combined TRAIN {len(train_df_raw)} | VAL {len(val_df)} | TEST {len(test_df)}")
-
-    # Final leakage audit (path + MD5, auto-resolve) - runs in every mode.
-    train_df_raw, val_df, test_df = audit_and_resolve_md5(
-        train_df_raw, val_df, test_df, save_dir=config.save_dir,
-        strict=config.strict_md5_assert, auto_resolve=config.auto_resolve_md5_dupes,
-    )
 
     # Cross-source near-duplicate audit only makes sense when both sources are present.
     if mode == "combined" and config.run_cross_source_audit:
-        cross_source_audit(synth_splits, real_splits, class_names, seed=config.seed, save_dir=config.save_dir)
+        cross_source_audit(
+            (s_tr, val_df[val_df["source"] == "synthetic"], test_df[test_df["source"] == "synthetic"]),
+            (r_tr, val_df[val_df["source"] == "real"], test_df[test_df["source"] == "real"]),
+            class_names, seed=config.seed, save_dir=config.save_dir,
+        )
     else:
         print("[INFO] Cross-source audit skipped.")
 

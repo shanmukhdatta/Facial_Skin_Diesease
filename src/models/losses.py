@@ -35,7 +35,8 @@ class FocalLoss(LossBase):
         pt = tf.reduce_sum(y_true_oh * y_pred, axis=-1)
         ce = -tf.math.log(pt)
         focal = self.alpha * tf.pow(1.0 - pt, self.gamma) * ce
-        return tf.reduce_mean(focal)
+        # Keras must receive one loss per example so fit(class_weight=...) can work.
+        return focal
 
     def get_config(self):
         cfg = super().get_config()

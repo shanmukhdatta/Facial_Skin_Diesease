@@ -7,7 +7,7 @@ from tensorflow.keras import backend as K
 from tensorflow.keras.optimizers import Adam, AdamW
 
 from configs.config import ProjectConfig, default_config
-from src.models.custom_layers import get_preprocess_layer
+from src.models.custom_layers import get_preprocess_layer, CUSTOM_OBJECTS
 from src.models.losses import FocalLoss
 from src.models.builder import (
     build_classification_head,
@@ -81,7 +81,7 @@ class PhasedTrainer:
         model.compile(optimizer=Adam(self.config.base_lr), loss=loss_fn, metrics=metrics)
 
         cbs1, _ = make_callbacks(f"{model_name}_p1", self.config.save_dir, patience_es=6)
-        cbs1.append(cosine_lr_schedule(self.config.base_lr, self.config.epochs_phase1))
+        # ReduceLROnPlateau is the only LR scheduler for this phase.
 
         h1 = model.fit(
             train_ds,
@@ -99,7 +99,7 @@ class PhasedTrainer:
         model.compile(optimizer=Adam(self.config.finetune_lr), loss=loss_fn, metrics=metrics)
 
         cbs2, _ = make_callbacks(f"{model_name}_p2", self.config.save_dir, patience_es=7)
-        cbs2.append(cosine_lr_schedule(self.config.finetune_lr, self.config.epochs_phase2))
+        # ReduceLROnPlateau is the only LR scheduler for this phase.
 
         h2 = model.fit(
             train_ds,
@@ -121,7 +121,7 @@ class PhasedTrainer:
         )
 
         cbs3, _ = make_callbacks(f"{model_name}_p3", self.config.save_dir, patience_es=8)
-        cbs3.append(cosine_lr_schedule(self.config.full_ft_lr, self.config.epochs_phase3))
+        # ReduceLROnPlateau is the only LR scheduler for this phase.
 
         h3 = model.fit(
             train_ds,
@@ -133,11 +133,26 @@ class PhasedTrainer:
         )
         histories.append(h3.history)
 
-        # -- Save Final Model ---------------------------------------------------
+        # Select the phase/checkpoint with BEST validation accuracy, never last epoch.
+        from pathlib import Path
+        import json
+        phase_histories = [h1.history, h2.history, h3.history]
+        phase_scores = [max(h["val_accuracy"]) if h.get("val_accuracy") else float("-inf")
+                        for h in phase_histories]
+        assert all(s > float("-inf") for s in phase_scores), "Missing validation accuracy for phase selection"
+        phase_i = int(max(range(3), key=lambda i: phase_scores[i]))
+        candidate = self.config.save_dir / f"{model_name}_p{phase_i + 1}_best.keras"
+        assert candidate.is_file(), f"Missing best phase checkpoint: {candidate}"
+        model = keras.models.load_model(str(candidate), custom_objects=CUSTOM_OBJECTS)
         final_path = str(self.config.save_dir / f"{model_name}_final.keras")
         model.save(final_path)
-        print(f"\n[OK] Model saved -> {final_path}")
-
+        manifest = {"model": model_name, "chosen_phase": phase_i + 1,
+                    "best_val_accuracy": float(phase_scores[phase_i]),
+                    "all_phase_best_val_accuracy": [float(s) for s in phase_scores],
+                    "selected_checkpoint": candidate.name}
+        with (self.config.save_dir / f"{model_name}_checkpoint_selection.json").open("w") as f:
+            json.dump(manifest, f, indent=2)
+        print(f"\n[OK] Validation-selected model saved -> {final_path}")
         return model, histories, final_path
 
     @staticmethod

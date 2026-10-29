@@ -37,10 +37,13 @@ skin_cancer_seed/
 *.tgz
 *.7z
 
-# Runtime outputs and logs
-outputs/
+# Runtime outputs remain excluded except explicitly curated reproducibility evidence.
+outputs/*
+!outputs/research_evidence/
+!outputs/research_evidence/**
 logs/
 *.log
+!outputs/research_evidence/**/*.log
 
 # Jupyter Notebook Checkpoints
 .ipynb_checkpoints/

@@ -25,6 +25,19 @@ except ImportError:
 from PIL import Image as PILImage, ImageOps
 
 VALID_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".webp"}
+CANONICAL_CLASSES = ("Acne", "Fungal_Infection", "Hyperpigmentation", "Normal_Skin", "Skin_Cancer", "Vitiligo")
+CLASS_ALIASES = {
+    "acne": "Acne", "fungal_infection": "Fungal_Infection",
+    "hyper_pigmentation": "Hyperpigmentation", "hyperpigmentation": "Hyperpigmentation",
+    "normal_skin": "Normal_Skin", "skin_cancer": "Skin_Cancer",
+    "vitiligo": "Vitiligo",
+}
+
+def normalize_class_folder(name: str) -> str:
+    """Canonicalize the two source datasets' six folder naming conventions."""
+    key = re.sub(r"[-\\s]+", "_", name.strip().lower())
+    return CLASS_ALIASES.get(key, name)
+
 
 
 def discover_dataset(data_dir: Path) -> Tuple[pd.DataFrame, List[str]]:
@@ -32,12 +45,16 @@ def discover_dataset(data_dir: Path) -> Tuple[pd.DataFrame, List[str]]:
     data_dir = Path(data_dir)
     assert data_dir.exists(), f"[ERROR] DATA_DIR not found: {data_dir}"
 
-    classes = sorted([d.name for d in data_dir.iterdir() if d.is_dir()])
-    assert len(classes) > 0, f"[ERROR] No sub-folders found in DATA_DIR: {data_dir}"
+    folders = sorted((d for d in data_dir.iterdir() if d.is_dir()), key=lambda d: d.name)
+    assert folders, f"[ERROR] No sub-folders found in DATA_DIR: {data_dir}"
+    canonical = [normalize_class_folder(d.name) for d in folders]
+    assert len(canonical) == len(set(canonical)), "Duplicate canonical class folders in data directory"
+    classes = sorted(canonical)
+    folder_by_class = dict(zip(canonical, folders))
 
     records, bad_files = [], []
     for label_idx, cls in enumerate(classes):
-        cls_dir = data_dir / cls
+        cls_dir = folder_by_class[cls]
         for f in cls_dir.rglob("*"):
             if f.suffix.lower() in VALID_EXTS:
                 records.append({"path": str(f), "label": label_idx, "class": cls})
@@ -171,11 +188,12 @@ REFERENCE_REAL_SPLIT = {
 
 
 def _find_saved_split_csv(save_dir: Optional[Path], override: Optional[str]) -> Optional[str]:
-    """Candidate order is identical to the notebook (override, /kaggle/input, SAVE_DIR)."""
-    cands = ([str(override)] if override else []) \
-        + sorted(glob.glob("/kaggle/input/**/splits_v2.csv", recursive=True)) \
-        + ([str(Path(save_dir) / "splits_v2.csv")] if save_dir else [])
-    return next((p for p in cands if p and os.path.exists(p)), None)
+    """Only reuse a split explicitly supplied by the researcher; never silently pick an old run."""
+    if not override:
+        return None
+    if not Path(override).is_file():
+        raise FileNotFoundError(f"Explicit real split CSV does not exist: {override}")
+    return str(override)
 
 
 def _try_load_saved_split(df_clean_real: pd.DataFrame, csv_path: str):
@@ -193,10 +211,24 @@ def _try_load_saved_split(df_clean_real: pd.DataFrame, csv_path: str):
             m = a.merge(b[["_k", "split", "group"]], on="_k", how="left")
         assert len(m) == len(df_clean_real) and m["split"].notna().all(), \
             "some images of this dataset are missing from the CSV"
+        assert set(m["split"]) <= {"train", "val", "test"}, "invalid split labels"
+        assert m["group"].notna().all(), "missing group assignment"
+        if "sha256" not in sp.columns:
+            raise ValueError("A reusable real split must include sha256; old path-only manifests cannot verify file identity.")
+        from hashlib import sha256
+        hashes = {str(p): sha256(Path(p).read_bytes()).hexdigest() for p in df_clean_real["path"]}
+        if set(df_clean_real["path"]) <= set(sp["path"]):
+            expected = sp.set_index("path")["sha256"]
+            assert all(hashes[p] == expected[p] for p in hashes), "real dataset file hashes differ from frozen split"
+        else:
+            def key_fn(p):
+                return f"{normalize_class_folder(Path(p).parent.name)}/{Path(p).name}"
+            expected = sp.assign(_k=sp["path"].map(key_fn)).set_index("_k")["sha256"]
+            assert all(h == expected[key_fn(p)] for p, h in hashes.items()), "real dataset file hashes differ from frozen split"
+        assert m.groupby("group")["split"].nunique().max() == 1, "group crosses split boundaries"
         return m
-    except Exception as e:  # noqa: BLE001
-        print(f"[WARN] Could not use {csv_path}: {e}\n       -> the split will be recomputed instead.")
-        return None
+    except Exception as e:
+        raise ValueError(f"Refusing to reuse incompatible real split {csv_path}: {e}") from e
 
 
 def _hash_variants(path: str, phash_size: int) -> List[int]:
@@ -320,7 +352,7 @@ def split_real_grouped(
         test_idx = np.where(sp == "test")[0]
     else:
         if not csv_path:
-            print("[INFO] No splits_v2.csv found -> the split will be recomputed (identical procedure).")
+            print("[INFO] No explicit real split supplied; generating fresh group-aware split.")
 
         # ── 6.1 Flip-aware perceptual hashes + exact all-pairs distances ─────
         print("[INFO] Hashing every image in 4 orientations (a few minutes)...")
@@ -498,7 +530,9 @@ def split_real_grouped(
                   "6,298 groups). Attach splits_v2.csv, or check the dataset is the same 10,227 images.")
 
     if save_dir:
-        out = pd.DataFrame({"path": X_all, "class": cls_arr, "group": groups_all, "split": split_name})
+        from hashlib import sha256
+        out = pd.DataFrame({"path": X_all, "class": cls_arr, "group": groups_all, "split": split_name,
+                            "sha256": [sha256(Path(p).read_bytes()).hexdigest() for p in X_all]})
         if not used_saved:
             out.to_csv(save_dir / "splits_v2.csv", index=False)
             print(f"[OK] Split assignment saved -> {save_dir / 'splits_v2.csv'}")
@@ -529,7 +563,8 @@ def _parse_stem(path_str: str) -> Tuple[str, Optional[str], Optional[int]]:
 
 
 def split_synthetic_grouped(
-    df_clean: pd.DataFrame, test_size: float = 0.30, seed: int = 42
+    df_clean: pd.DataFrame, test_size: float = 0.30, seed: int = 42,
+    split_csv_override: Optional[str] = None, save_dir: Optional[Union[str, Path]] = None,
 ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
     Split the synthetic dataset with source-aware logic:
@@ -546,7 +581,7 @@ def split_synthetic_grouped(
     if train_test_split is None:
         raise ImportError("scikit-learn is required for split_synthetic_grouped().")
 
-    df_clean = df_clean.copy()
+    df_clean = df_clean.reset_index(drop=True).copy()
     kinds, keys, variants = [], [], []
     for p in df_clean["path"]:
         kind, key, var = _parse_stem(p)
@@ -663,6 +698,52 @@ def split_synthetic_grouped(
     val_df = df_clean.loc[val_idx, ["path", "label", "class"]].reset_index(drop=True)
     test_df = df_clean.loc[test_idx, ["path", "label", "class"]].reset_index(drop=True)
 
+    # Persist a content-verified, prompt-aware split. Reuse is explicit only.
+    if split_csv_override:
+        frozen_path = Path(split_csv_override)
+        if not frozen_path.is_file():
+            raise FileNotFoundError(f"Synthetic frozen split missing: {frozen_path}")
+        frozen = pd.read_csv(frozen_path, dtype=str)
+        required = {"path", "split", "class", "sha256"}
+        assert required <= set(frozen), f"Synthetic frozen split missing {required - set(frozen)}"
+        def key_fn(p):
+            return f"{normalize_class_folder(Path(p).parent.name)}/{Path(p).name}"
+        frozen["_key"] = frozen["path"].map(key_fn)
+        assert frozen["_key"].is_unique, "duplicate filename keys in frozen synthetic split"
+        from hashlib import sha256
+        expected = frozen.set_index("_key")
+        assert len(expected) == len(train_df) + len(val_df) + len(test_df), "synthetic frozen split image count differs"
+        def remap(part):
+            return part.assign(_key=part["path"].map(key_fn))
+        full = pd.concat([train_df, val_df, test_df], ignore_index=True)
+        assert full["path"].map(key_fn).is_unique, "synthetic filenames are not unique"
+        for p in full["path"]:
+            k = key_fn(p)
+            assert k in expected.index, f"unknown synthetic file {k}"
+            assert sha256(Path(p).read_bytes()).hexdigest() == expected.loc[k, "sha256"], f"changed synthetic image: {k}"
+        rows = []
+        for _, row in full.iterrows():
+            split = expected.loc[key_fn(row["path"]), "split"]
+            assert split in ("train", "val", "test"), f"invalid frozen split: {split}"
+            assert row["class"] == expected.loc[key_fn(row["path"]), "class"], "frozen synthetic class mismatch"
+            rows.append(split)
+        full["split"] = rows
+        # Reject a reused split that places prompt variants across partitions.
+        parsed = full["path"].map(_parse_stem)
+        keys = [f"{cl}_{p[1]}" if p[0] == "synthetic" else None
+                for cl, p in zip(full["class"], parsed)]
+        temp = pd.DataFrame({"key": keys, "split": rows}).dropna(subset=["key"])
+        assert temp.groupby("key")["split"].nunique().max() <= 1, "frozen synthetic prompt leakage"
+        train_df = full[full["split"] == "train"].drop(columns=["split"]).reset_index(drop=True)
+        val_df = full[full["split"] == "val"].drop(columns=["split"]).reset_index(drop=True)
+        test_df = full[full["split"] == "test"].drop(columns=["split"]).reset_index(drop=True)
+    if save_dir:
+        from hashlib import sha256
+        out = pd.concat([train_df.assign(split="train"), val_df.assign(split="val"),
+                         test_df.assign(split="test")], ignore_index=True)
+        out["sha256"] = [sha256(Path(p).read_bytes()).hexdigest() for p in out["path"]]
+        Path(save_dir).mkdir(parents=True, exist_ok=True)
+        out[["path", "class", "split", "sha256"]].to_csv(Path(save_dir) / "synthetic_frozen_v1.csv", index=False)
     print(f"  Synthetic Train (raw, pre-balance) : {len(train_df)} images")
     print(f"  Synthetic Validation               : {len(val_df)} images")
     print(f"  Synthetic Test                     : {len(test_df)} images")

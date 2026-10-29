@@ -16,7 +16,7 @@ def make_callbacks(
     monitor: str = "val_accuracy",
     patience_es: int = 8,
 ) -> Tuple[List[keras.callbacks.Callback], str]:
-    """Create standard training callbacks: Checkpoint, EarlyStopping, ReduceLR, CSVLogger."""
+    """Create validation-based checkpoint, early stopping, plateau LR and CSV logging."""
     save_dir = Path(save_dir)
     save_dir.mkdir(parents=True, exist_ok=True)
     ckpt_path = str(save_dir / f"{model_name}_best.keras")

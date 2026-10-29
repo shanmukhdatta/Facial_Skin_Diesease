@@ -154,6 +154,8 @@ def evaluate_per_source(
     for name, (yt, yp) in systems.items():
         yt = np.asarray(yt)
         yp = np.asarray(yp)
+        if len(yt) != len(test_df) or len(yp) != len(test_df):
+            raise ValueError(f"Per-source evaluation row-count mismatch for {name}")
         for sname, msk in (("real", ~is_syn), ("synthetic", is_syn)):
             if msk.sum() == 0:
                 continue

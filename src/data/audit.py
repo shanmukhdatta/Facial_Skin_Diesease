@@ -38,90 +38,68 @@ def audit_and_resolve_md5(
     strict: bool = True,
     auto_resolve: bool = True,
 ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """De-duplicate the FULL split pools before sampling training fractions.
+
+    Every MD5 collision is considered, including within-partition collisions.
+    Conflicting-label copies are all removed. With one label, preserve one
+    test copy if present, else validation, else training. Report each removal,
+    its source and its reason. No input image file is deleted on disk.
     """
-    Check 1: no file PATH in more than one of the combined partitions.
-    Check 2: no identical file CONTENT (MD5) in more than one partition.
-
-    Resolution (when ``auto_resolve``):
-      (a) identical bytes, SAME class everywhere -> keep exactly one copy
-          (preferring the one already in train) and drop the rest;
-      (b) identical bytes, DIFFERENT class labels -> label cannot be trusted:
-          every copy is excluded and logged to md5_conflicting_label_duplicates.csv.
-    If ``auto_resolve`` is False and ``strict`` is True the function asserts.
-    """
-    save_dir = Path(save_dir) if save_dir else None
-
-    set_tr, set_va, set_te = set(train_df["path"]), set(val_df["path"]), set(test_df["path"])
-    assert not (set_tr & set_va), "[ERROR] Leakage: combined train ∩ val is non-empty!"
-    assert not (set_tr & set_te), "[ERROR] Leakage: combined train ∩ test is non-empty!"
-    assert not (set_va & set_te), "[ERROR] Leakage: combined val ∩ test is non-empty!"
-    print("[OK] Path-level check passed: no file path crosses a combined partition boundary.")
-
-    print("[INFO] Hashing all combined images (MD5) to catch identical-content duplicates...")
-    all_paths_labeled = _labeled_paths(train_df, val_df, test_df)
-    hash_to_splits: Dict[str, set] = {}
-    hash_to_paths: Dict[str, List[str]] = {}
-    for p, split in all_paths_labeled:
-        h = file_md5(p)
-        hash_to_splits.setdefault(h, set()).add(split)
-        hash_to_paths.setdefault(h, []).append(p)
-
-    leaking = {h: s for h, s in hash_to_splits.items() if len(s) > 1}
-    if leaking:
-        print(f"[WARN] {len(leaking)} identical-content image(s) found spanning multiple partitions!")
-        for h, s in list(leaking.items())[:10]:
-            print(f"   hash {h[:10]}... in {sorted(s)}: {hash_to_paths[h][:3]}")
-        if save_dir:
-            save_dir.mkdir(parents=True, exist_ok=True)
-            pd.DataFrame([{"md5": h, "partitions": sorted(s), "paths": hash_to_paths[h]}
-                          for h, s in leaking.items()]
-                         ).to_csv(save_dir / "md5_cross_partition_duplicates.csv", index=False)
-
-    if leaking and auto_resolve:
-        path_to_split = {p: s for p, s in all_paths_labeled}
-        path_to_label = pd.concat([
-            train_df[["path", "class"]], val_df[["path", "class"]], test_df[["path", "class"]],
-        ]).drop_duplicates("path").set_index("path")["class"].to_dict()
-
-        drop_paths, conflict_rows = set(), []
-        for h in leaking:
-            grp_paths = hash_to_paths[h]
-            labels = {path_to_label.get(p) for p in grp_paths}
-            if len(labels) > 1:
-                drop_paths.update(grp_paths)
-                conflict_rows.append({"md5": h, "labels": sorted(labels), "paths": grp_paths})
-            else:
-                keep = next((p for p in grp_paths if path_to_split.get(p) == "train"), grp_paths[0])
-                drop_paths.update(p for p in grp_paths if p != keep)
-
-        print(f"\n[INFO] Resolving: dropping {len(drop_paths)} duplicate-content image(s) "
-              f"({len(conflict_rows)} conflicting-label group(s) excluded entirely, "
-              f"{len(leaking) - len(conflict_rows)} same-label group(s) de-duplicated to one copy).")
-        if conflict_rows and save_dir:
-            pd.DataFrame(conflict_rows).to_csv(save_dir / "md5_conflicting_label_duplicates.csv", index=False)
-            print(f"   [WARN] Conflicting-label duplicates logged -> "
-                  f"{save_dir / 'md5_conflicting_label_duplicates.csv'} (review manually).")
-
-        keep_rows = lambda d: d[~d["path"].isin(drop_paths)].reset_index(drop=True)
-        train_df, val_df, test_df = keep_rows(train_df), keep_rows(val_df), keep_rows(test_df)
-        print(f"[OK] After resolution - train {len(train_df)}, val {len(val_df)}, test {len(test_df)}")
-
-        # Re-verify: no duplicate content should remain across partitions.
-        re_splits: Dict[str, set] = {}
-        for p, split in _labeled_paths(train_df, val_df, test_df):
-            re_splits.setdefault(file_md5(p), set()).add(split)
-        still = {h: s for h, s in re_splits.items() if len(s) > 1}
-        assert not still, "[ERROR] Duplicates still cross a partition boundary after resolution - investigate."
-        print("[OK] Re-verified: no identical-content image crosses a partition boundary after resolution.")
-    elif strict:
-        assert not leaking, ("[ERROR] Content-hash leakage detected - identical image bytes appear in more "
-                             "than one of train/val/test (see above).")
-    elif leaking:
-        print("[WARN] strict_md5_assert is False: continuing despite MD5 duplicates.")
-
-    print(f"[OK] Content-hash check: {len(hash_to_splits)} unique images, "
-          f"{len(leaking)} duplicate hash(es) originally crossing a partition boundary.")
-    return train_df, val_df, test_df
+    outdir = Path(save_dir) if save_dir else None
+    if outdir:
+        outdir.mkdir(parents=True, exist_ok=True)
+    parts = [train_df.assign(_split="train"), val_df.assign(_split="val"),
+             test_df.assign(_split="test")]
+    full = pd.concat(parts, ignore_index=True)
+    if not full["path"].is_unique:
+        raise ValueError("The same path appears in multiple full-pool partitions")
+    if "source" not in full:
+        full["source"] = "unspecified"
+    full["_md5"] = [file_md5(p) for p in full["path"]]
+    # Preserve original order, choose test > validation > training as the survivor.
+    priority = {"test": 0, "val": 1, "train": 2}
+    drop_index = set()
+    removed = []
+    for digest, grp in full.groupby("_md5", sort=True):
+        if len(grp) == 1:
+            continue
+        conflict = grp["class"].nunique() != 1
+        keep_idx = None if conflict else min(
+            grp.index, key=lambda i: (priority[full.at[i, "_split"]], str(full.at[i, "path"]))
+        )
+        for idx, row in grp.iterrows():
+            if idx == keep_idx:
+                continue
+            drop_index.add(idx)
+            removed.append({"md5": digest, "path": row["path"],
+                            "source": row["source"], "class": row["class"],
+                            "split": row["_split"],
+                            "reason": "conflicting_label" if conflict else "exact_duplicate"})
+    if drop_index and not auto_resolve:
+        if strict:
+            raise ValueError(f"{len(drop_index)} MD5 duplicates found; auto_resolve=False")
+        print(f"[WARN] {len(drop_index)} duplicate rows retained because auto_resolve=False")
+        drop_index.clear()
+    kept = full.drop(index=list(drop_index))
+    if outdir:
+        fields = ["md5", "path", "source", "class", "split", "reason"]
+        pd.DataFrame(removed, columns=fields).to_csv(outdir / "md5_removed_images.csv", index=False)
+        stats = (pd.DataFrame(removed, columns=fields)
+                 .groupby(["source", "reason"]).size().reset_index(name="removed")
+                 if removed else pd.DataFrame(columns=["source", "reason", "removed"]))
+        stats.to_csv(outdir / "md5_removals_by_source.csv", index=False)
+        counts = full.groupby("source").size().rename("original").to_frame()
+        after = kept.groupby("source").size().rename("retained")
+        counts = counts.join(after, how="left").fillna(0).astype(int).reset_index()
+        counts["removed"] = counts["original"] - counts["retained"]
+        counts.to_csv(outdir / "md5_source_totals.csv", index=False)
+    if strict and kept["_md5"].duplicated().any():
+        raise AssertionError("Duplicate image bytes remained after MD5 resolution")
+    def part(split):
+        return (kept[kept["_split"] == split]
+                .drop(columns=["_split", "_md5"]).reset_index(drop=True))
+    print(f"[OK] Full-pool MD5 audit: {len(full)} images, {len(drop_index)} removals.")
+    return part("train"), part("val"), part("test")
 
 
 def cross_source_audit(

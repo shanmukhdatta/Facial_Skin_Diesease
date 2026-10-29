@@ -1,5 +1,6 @@
 import argparse
 import sys
+import numpy as np
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -17,7 +18,8 @@ def parse_args():
     parser.add_argument("--mode", type=str, default=None, choices=["combined", "synthetic", "real"],
                         help="Data source used in training (must match run_training.py).")
     parser.add_argument("--single_source", action="store_true", help="Legacy single-source split on --data_dir.")
-    parser.add_argument("--split_csv", type=str, default=None, help="Saved splits_v2.csv for the real data.")
+    parser.add_argument("--split_csv", type=str, default=None, help="Explicit content-verified real frozen split CSV.")
+    parser.add_argument("--synthetic_split_csv", type=str, default=None, help="Explicit content-verified synthetic frozen split CSV.")
     parser.add_argument("--save_dir", type=str, default=None, help="Directory with saved .keras models.")
     parser.add_argument("--plot_dir", type=str, default=None, help="Directory to save evaluation plots.")
     parser.add_argument("--label_map", type=str, default=None, help="Path to label_map.json.")
@@ -57,6 +59,8 @@ def main():
         config.real_fraction = None
     if args.split_csv:
         config.split_csv_override = args.split_csv
+    if args.synthetic_split_csv:
+        config.synthetic_split_csv_override = args.synthetic_split_csv
     # Evaluation only needs the val/test sets; the report-only audit is skipped (training already ran it).
     config.run_cross_source_audit = False
     if args.save_dir:

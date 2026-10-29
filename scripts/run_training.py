@@ -37,6 +37,7 @@ def parse_args():
     parser.add_argument("--single_source", action="store_true",
                          help="Skip the combined synthetic+real pipeline and use the legacy "
                               "single-source stratified split on --data_dir.")
+    parser.add_argument("--synthetic_split_csv", type=str, default=None, help="Explicit synthetic frozen split CSV.")
     parser.add_argument("--split_csv", type=str, default=None,
                          help="Path to a saved splits_v2.csv (path, split, group) for the real data.")
     parser.add_argument("--skip_cross_source_audit", action="store_true",
@@ -104,6 +105,8 @@ def main():
         config.real_fraction = None
     if args.split_csv:
         config.split_csv_override = args.split_csv
+    if args.synthetic_split_csv:
+        config.synthetic_split_csv_override = args.synthetic_split_csv
     if args.skip_cross_source_audit:
         config.run_cross_source_audit = False
     if args.rebalance_train:
