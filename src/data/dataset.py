@@ -35,7 +35,7 @@ CLASS_ALIASES = {
 
 def normalize_class_folder(name: str) -> str:
     """Canonicalize the two source datasets' six folder naming conventions."""
-    key = re.sub(r"[-\\s]+", "_", name.strip().lower())
+    key = re.sub(r"[-\s]+", "_", name.strip().lower())
     return CLASS_ALIASES.get(key, name)
 
 
