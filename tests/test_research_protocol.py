@@ -50,3 +50,27 @@ def test_md5_full_pool_counts_and_stable_test(tmp_path):
     assert not len(new_tr) and len(new_val) == len(new_test) == 1
     totals = pd.read_csv(tmp_path / "md5_source_totals.csv").set_index("source")
     assert totals.loc["real", "removed"] == 1
+
+def test_reuse_real_e2_portable_manifest(tmp_path):
+    from hashlib import sha256
+    from src.data.dataset import _try_load_saved_split
+    a = _img(tmp_path / "Normal_Skin" / "one.jpg", (1, 2, 3))
+    b = _img(tmp_path / "Skin_cancer" / "two.jpg", (4, 5, 6))
+    real = pd.DataFrame([{"path": a}, {"path": b}])
+    manifest = pd.DataFrame([
+        {"relative_path": "Normal_Skin/one.jpg", "sha256": sha256(Path(a).read_bytes()).hexdigest(),
+         "split": "test", "group": "g0", "class": "Normal_Skin"},
+        {"relative_path": "Skin_cancer/two.jpg", "sha256": sha256(Path(b).read_bytes()).hexdigest(),
+         "split": "train", "group": "g1", "class": "Skin_Cancer"},
+    ])
+    fn = tmp_path / "splits_v3.csv"
+    manifest.to_csv(fn, index=False)
+    reused = _try_load_saved_split(real, str(fn))
+    assert list(reused["split"]) == ["test", "train"]
+    _img(Path(a), (100, 20, 30))
+    try:
+        _try_load_saved_split(real, str(fn))
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("Altered image contents must invalidate the split")

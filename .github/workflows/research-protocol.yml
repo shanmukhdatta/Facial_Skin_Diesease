@@ -1,0 +1,39 @@
+name: Research protocol checks
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+jobs:
+  protocol:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install CPU-only test dependencies
+        run: python -m pip install --disable-pip-version-check -q numpy pandas pillow scikit-learn ImageHash pytest
+      - name: Check syntax and notebooks
+        run: |
+          python -m compileall -q src configs scripts tests
+          python - <<'PY'
+          import json
+          import pathlib
+          import re
+          notebooks = sorted(pathlib.Path('Note books').glob('*.ipynb'))
+          assert len(notebooks) == 2, notebooks
+          assert {x.name for x in notebooks} == {'E2_Real_Only_Classification.ipynb','E3_Synthetic_Real_Classification.ipynb'}
+          for path in notebooks:
+              data = json.loads(path.read_text(encoding='utf-8'))
+              source = ''.join(''.join(cell.get('source', [])) for cell in data['cells'])
+              assert not re.search(r'/kaggle/input/datasets/|shanmukhadattaboda', source), path
+              for cell in data['cells']:
+                  if cell['cell_type'] == 'code':
+                      assert not cell.get('outputs'), path
+                      compile(''.join(cell.get('source', [])), f'{path}:{cell.get("id")}', 'exec')
+          print('Notebook structure, source paths and syntax checked')
+          PY
+      - name: CPU tests for frozen splits and MD5 audit
+        run: python -m pytest -q tests/test_research_protocol.py

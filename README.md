@@ -677,7 +677,7 @@ python scripts/run_inference.py --demo
 
 ## Modular Pipeline
 
-`Note books/Modular_Pipeline.ipynb`
+`Note books/E3_Synthetic_Real_Classification.ipynb`
 
 Covers:
 
@@ -700,14 +700,14 @@ jupyter lab "Note books/Modular_Pipeline.ipynb"
 
 ## Experimental Benchmark
 
-`Note books/Notebook.ipynb`
+`Note books/E2_Real_Only_Classification.ipynb`
 
 Contains the broader multi-architecture experimental workflow.
 
 Run:
 
 ```bash
-jupyter lab "Note books/Notebook.ipynb"
+jupyter lab "Note books/E2_Real_Only_Classification.ipynb"
 ```
 
 For new experiments, the modular pipeline and CLI scripts are recommended.

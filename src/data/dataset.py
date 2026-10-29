@@ -200,11 +200,14 @@ def _try_load_saved_split(df_clean_real: pd.DataFrame, csv_path: str):
     """Return a frame with columns path/split/group aligned to df_clean_real, or None."""
     try:
         sp = pd.read_csv(csv_path)
-        assert {"path", "split", "group"} <= set(sp.columns), "CSV needs columns: path, split, group"
+        if "path" not in sp and "relative_path" in sp:
+            # E2 Kaggle notebook exports portable relative_path instead of absolute path.
+            sp["path"] = sp["relative_path"]
+        assert {"path", "split", "group"} <= set(sp.columns), "CSV needs path/relative_path, split and group"
         if set(df_clean_real["path"]) <= set(sp["path"]):
             m = df_clean_real[["path"]].merge(sp[["path", "split", "group"]], on="path", how="left")
         else:  # dataset mounted elsewhere -> match on class/filename
-            key = lambda p: f"{Path(p).parent.name}/{Path(p).name}"
+            key = lambda p: f"{normalize_class_folder(Path(p).parent.name)}/{Path(p).name}"
             a = df_clean_real[["path"]].assign(_k=df_clean_real["path"].map(key))
             b = sp.assign(_k=sp["path"].map(key))
             assert a["_k"].is_unique and b["_k"].is_unique, "class/filename keys are not unique"
@@ -515,19 +518,8 @@ def split_real_grouped(
     print("\n  Per-class counts and groups per class:")
     print(tab.to_string())
 
-    # Compare with the notebook's reference split (only meaningful for that dataset).
-    ref = REFERENCE_REAL_SPLIT
-    if set(ref["per_class_split"]) == set(tab.index):
-        ok = (len(train_idx), len(val_idx), len(test_idx)) == (ref["train"], ref["val"], ref["test"]) \
-            and len(set(groups_all)) == ref["groups"]
-        for c, trio in ref["per_class_split"].items():
-            ok &= tuple(int(tab.loc[c, k]) for k in ("train", "val", "test")) == trio
-            ok &= int(tab.loc[c, "groups"]) == ref["per_class_groups"][c]
-        if ok:
-            print("\n[OK] Matches the notebook reference split: 7,144 / 1,533 / 1,550 images, 6,298 groups.")
-        else:
-            print("\n[WARN] Does NOT match the notebook reference numbers (7,144 / 1,533 / 1,550 images, "
-                  "6,298 groups). Attach splits_v2.csv, or check the dataset is the same 10,227 images.")
+    # No comparison to the older, contaminated 10,227-image data is valid here.
+    print("[INFO] Retain these run-specific grouping counts; do not substitute historical splits.")
 
     if save_dir:
         from hashlib import sha256
@@ -535,7 +527,7 @@ def split_real_grouped(
                             "sha256": [sha256(Path(p).read_bytes()).hexdigest() for p in X_all]})
         if not used_saved:
             out.to_csv(save_dir / "splits_v2.csv", index=False)
-            print(f"[OK] Split assignment saved -> {save_dir / 'splits_v2.csv'}")
+            print(f"[OK] New split assignment saved -> {save_dir / 'splits_v2.csv'}")
         out.to_csv(save_dir / "real_splits_used.csv", index=False)
         print(f"[OK] Split actually used saved -> {save_dir / 'real_splits_used.csv'}")
 
@@ -704,6 +696,9 @@ def split_synthetic_grouped(
         if not frozen_path.is_file():
             raise FileNotFoundError(f"Synthetic frozen split missing: {frozen_path}")
         frozen = pd.read_csv(frozen_path, dtype=str)
+        if "path" not in frozen and "relative_path" in frozen:
+            # E3 Kaggle notebook stores portable paths rather than account-specific mounts.
+            frozen["path"] = frozen["relative_path"]
         required = {"path", "split", "class", "sha256"}
         assert required <= set(frozen), f"Synthetic frozen split missing {required - set(frozen)}"
         def key_fn(p):
